@@ -80,8 +80,14 @@
   }
 
   // The DOM selection is the Vim cursor; #cursor only draws its focus end.
-  let visual = false, pending = "", saved = null;
-  const ESC = "\x1b";
+  // In V mode the selection spans whole rendered lines, so the cursor is kept apart.
+  let mode = "", pending = "", saved = null, cursor = null, lineAnchor = null;
+  const ESC = "\x1b", controls = {f: "\x06", b: "\x02"};
+
+  function caret() {
+    const selection = window.getSelection();
+    return [selection.focusNode, selection.focusOffset];
+  }
 
   function rememberSelection() {
     const selection = window.getSelection();
@@ -92,12 +98,18 @@
     if (!window.getSelection().focusNode && saved && saved[2].isConnected) window.getSelection().setBaseAndExtent(...saved);
   }
 
-  function drawCursor() {
-    const selection = window.getSelection(), mark = document.getElementById("cursor"), node = selection.focusNode;
+  function rectAt([node, offset]) {
+    if (!node) return null;
     const range = document.createRange();
-    if (node) range.setStart(node, selection.focusOffset);
-    if (node && node.nodeType === 3 && selection.focusOffset < node.length) range.setEnd(node, selection.focusOffset + 1);
-    const rect = node && range.getClientRects()[0];
+    range.setStart(node, offset);
+    if (node.nodeType === 3 && offset < node.length) range.setEnd(node, offset + 1);
+    return range.getClientRects()[0] || null;
+  }
+
+  const cursorRect = () => rectAt(mode === "V" ? cursor : caret());
+
+  function drawCursor() {
+    const mark = document.getElementById("cursor"), rect = cursorRect();
     mark.hidden = !rect;
     if (!rect) return;
     Object.assign(mark.style, {left: `${rect.left + scrollX}px`, top: `${rect.top + scrollY}px`, width: `${Math.max(rect.width, 8)}px`, height: `${rect.height}px`});
@@ -109,14 +121,66 @@
     if (text) window.getSelection().collapse(text, 0);
   }
 
-  function motion(direction, granularity) {
-    window.getSelection().modify(visual ? "extend" : "move", direction, granularity);
+  // Expands the collapsed selection to the rendered line it sits on.
+  function currentLine() {
+    const selection = window.getSelection();
+    selection.modify("move", "backward", "lineboundary");
+    const start = caret();
+    selection.modify("move", "forward", "lineboundary");
+    return [start, caret()];
+  }
+
+  function isBefore(a, b) {
+    const range = document.createRange();
+    range.setStart(...b);
+    return range.comparePoint(...a) < 0;
+  }
+
+  function selectLines() {
+    cursor = caret();
+    const [start, end] = currentLine(), down = !isBefore(start, lineAnchor[0]);
+    window.getSelection().setBaseAndExtent(...(down ? lineAnchor[0] : lineAnchor[1]), ...(down ? end : start));
+  }
+
+  function enterLineVisual() {
+    const selection = window.getSelection(), focus = caret();
+    if (!focus[0]) return;
+    selection.collapse(selection.anchorNode, selection.anchorOffset);
+    lineAnchor = currentLine();
+    selection.collapse(...focus);
+    mode = "V";
+    selectLines();
+  }
+
+  function move(step) {
+    const selection = window.getSelection();
+    if (mode === "V") selection.collapse(...cursor);
+    step(selection, mode === "v" ? "extend" : "move");
+    if (mode === "V") selectLines();
+  }
+
+  const motion = (direction, granularity) => move((selection, alter) => selection.modify(alter, direction, granularity));
+
+  // Scrolls half a page and moves the cursor by lines until it has covered the same distance.
+  function halfPage(sign) {
+    const distance = sign * window.innerHeight / 2, rect = cursorRect(), target = rect && rect.top + window.scrollY + distance;
+    window.scrollBy(0, distance);
+    if (!rect) return;
+    const reached = point => { const next = rectAt(point); return next && sign * (next.top + window.scrollY - target) >= 0; };
+    move((selection, alter) => {
+      for (let point = caret(); !reached(point);) {
+        selection.modify(alter, sign > 0 ? "forward" : "backward", "line");
+        const next = caret();
+        if (next[0] === point[0] && next[1] === point[1]) return;
+        point = next;
+      }
+    });
   }
 
   function leaveVisual() {
-    const selection = window.getSelection();
-    visual = false;
-    if (selection.focusNode) selection.collapse(selection.focusNode, selection.focusOffset);
+    const [node, offset] = mode === "V" ? cursor : caret();
+    mode = "";
+    if (node) window.getSelection().collapse(node, offset);
   }
 
   const bindings = {
@@ -128,23 +192,26 @@
     $: () => motion("forward", "lineboundary"),
     gg: () => motion("backward", "documentboundary"),
     G: () => motion("forward", "documentboundary"),
-    v: () => { if (visual) leaveVisual(); else visual = true; },
+    [controls.f]: () => halfPage(1),
+    [controls.b]: () => halfPage(-1),
+    v: () => { if (mode === "v") leaveVisual(); else mode = "v"; },
+    V: () => { if (mode === "V") leaveVisual(); else enterLineVisual(); },
     [ESC]: leaveVisual,
     " aa": () => post({type: "requestInput"})
   };
   const isPrefix = keys => Object.keys(bindings).some(sequence => sequence.startsWith(keys));
 
   document.addEventListener("keydown", event => {
-    if (event.metaKey || event.ctrlKey || event.altKey || event.isComposing) return;
-    const key = event.key === "Escape" ? ESC : event.key;
-    if (key.length !== 1) return;
+    if (event.metaKey || event.altKey || event.isComposing) return;
+    const key = event.key === "Escape" ? ESC : event.ctrlKey ? controls[event.key] : event.key;
+    if (!key || key.length !== 1) return;
     const keys = isPrefix(pending + key) ? pending + key : key;
     pending = "";
     if (!isPrefix(keys)) return;
     event.preventDefault();
     if (bindings[keys]) bindings[keys](); else pending = keys;
   });
-  document.addEventListener("mousedown", () => { visual = false; });
+  document.addEventListener("mousedown", () => { mode = ""; });
   window.addEventListener("focus", restoreSelection);
 
   window.quickMarkview = {
@@ -176,7 +243,7 @@
         let caret;
         if (this.currentLine) caret = this.scrollToLine(this.currentLine);
         else { window.scrollTo(0, oldScroll); caret = Array.from(document.querySelectorAll("[data-source-start]")).find(node => node.getBoundingClientRect().top >= 0); }
-        visual = false; placeCaret(caret);
+        mode = ""; placeCaret(caret);
         post({type: "ready", revision: this.currentRevision});
       })));
     },

@@ -32,6 +32,54 @@ final class VimKeyTests: XCTestCase, WKNavigationDelegate, WKScriptMessageHandle
         awaitMessage("requestInput") { press(view, " ", "a", "a") }
     }
 
+    func testLinewiseVisualSelectsWholeLinesAroundTheAnchor() {
+        let view = loadViewer("# One\n\nalpha beta\n\ngamma delta\n")
+        press(view, "j", "l", "l", "V")
+        XCTAssertEqual(js(view, "getSelection().toString()"), "alpha beta")
+        XCTAssertEqual(lastSelection?["lineStart"] as? Int, 3)
+
+        press(view, "j")
+        XCTAssertEqual(js(view, "getSelection().toString().replace(/\\s+/g, ' ')"), "alpha beta gamma delta")
+        XCTAssertEqual(lastSelection?["lineStart"] as? Int, 3)
+        XCTAssertEqual(lastSelection?["lineEnd"] as? Int, 5)
+
+        press(view, "k", "k")
+        XCTAssertEqual(js(view, "getSelection().toString().replace(/\\s+/g, ' ')"), "One alpha beta")
+        XCTAssertEqual(lastSelection?["lineStart"] as? Int, 1)
+        XCTAssertEqual(lastSelection?["lineEnd"] as? Int, 3)
+
+        press(view, "Escape")
+        XCTAssertEqual(js(view, "getSelection().isCollapsed"), "1")
+        XCTAssertEqual(js(view, "getSelection().focusNode.textContent"), "One")
+    }
+
+    func testLinewiseVisualStopsAtSoftWraps() {
+        let paragraph = Array(repeating: "word", count: 200).joined(separator: " ")
+        let view = loadViewer(paragraph + "\n")
+        press(view, "V")
+        let one = js(view, "getSelection().toString()") ?? ""
+        press(view, "j")
+        let two = js(view, "getSelection().toString()") ?? ""
+        XCTAssertTrue(one.hasPrefix("word"))
+        XCTAssertGreaterThan(two.count, one.count)
+        XCTAssertLessThan(two.count, paragraph.count)
+    }
+
+    func testControlFAndControlBMoveHalfAPage() {
+        let view = loadViewer((1...200).map { "line \($0)" }.joined(separator: "\n\n") + "\n")
+        press(view, "<C-f>")
+        XCTAssertEqual(js(view, "String(scrollY)"), "300")
+        XCTAssertGreaterThan(Int(js(view, "getSelection().focusNode.parentElement.dataset.sourceStart") ?? "") ?? 0, 1)
+        XCTAssertEqual(js(view, "String(document.getElementById('cursor').getBoundingClientRect().top < innerHeight)"), "true")
+
+        press(view, "<C-b>")
+        XCTAssertEqual(js(view, "String(scrollY)"), "0")
+        XCTAssertEqual(js(view, "getSelection().focusNode.textContent"), "line 1")
+
+        press(view, "v", "<C-f>")
+        XCTAssertEqual(js(view, "getSelection().isCollapsed"), "0")
+    }
+
     func testFocusRestoresSelectionClearedWhileAnotherViewHadFocus() {
         let view = loadViewer("alpha beta\n")
         press(view, "v", "l", "l")
@@ -43,6 +91,8 @@ final class VimKeyTests: XCTestCase, WKNavigationDelegate, WKScriptMessageHandle
         let view = loadViewer("text\n")
         XCTAssertEqual(js(view, "String(document.dispatchEvent(new KeyboardEvent('keydown', {key: 'x', cancelable: true})))"), "true")
         XCTAssertEqual(js(view, "String(document.dispatchEvent(new KeyboardEvent('keydown', {key: 'j', cancelable: true})))"), "false")
+        XCTAssertEqual(js(view, "String(document.dispatchEvent(new KeyboardEvent('keydown', {key: 'x', ctrlKey: true, cancelable: true})))"), "true")
+        XCTAssertEqual(js(view, "String(document.dispatchEvent(new KeyboardEvent('keydown', {key: 'f', ctrlKey: true, cancelable: true})))"), "false")
     }
 
     private func loadViewer(_ markdown: String) -> WKWebView {
@@ -62,7 +112,11 @@ final class VimKeyTests: XCTestCase, WKNavigationDelegate, WKScriptMessageHandle
     }
 
     private func press(_ view: WKWebView, _ keys: String...) {
-        for key in keys { _ = js(view, "document.dispatchEvent(new KeyboardEvent('keydown', {key: '\(key)', cancelable: true})); ''") }
+        for key in keys {
+            let control = key.hasPrefix("<C-")
+            let name = control ? String(key.dropFirst(3).dropLast()) : key
+            _ = js(view, "document.dispatchEvent(new KeyboardEvent('keydown', {key: '\(name)', ctrlKey: \(control), cancelable: true})); ''")
+        }
     }
 
     private func awaitMessage(_ type: String, during action: () -> Void) {

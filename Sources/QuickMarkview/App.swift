@@ -108,7 +108,7 @@ final class ViewerViewController: NSViewController, WKNavigationDelegate, WKScri
     let requestPanel = NSVisualEffectView()
     private var webView: WKWebView!
 
-    private static let idleStatus = "v select · Space a a request · q quit"
+    private static let idleStatus = "v/V select · Space a a request · q quit"
 
     init(options: LaunchOptions) {
         self.options = options

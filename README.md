@@ -44,11 +44,13 @@ The window opens over the left two thirds of the screen at full height. Press `q
 The viewer has a Vim-style cursor:
 
 ```text
-h j k l   Move by character / line.
-0 $       Line start / end.
-gg G      Document start / end.
-v         Toggle visual selection; motions extend it. Esc leaves it.
-<Space>aa Open the request panel for the current selection.
+h j k l     Move by character / line.
+0 $         Line start / end.
+gg G        Document start / end.
+<C-f> <C-b> Scroll half a page down / up; the cursor moves with it.
+v           Toggle visual selection; motions extend it. Esc leaves it.
+V           Toggle linewise visual selection over whole rendered lines.
+<Space>aa   Open the request panel for the current selection.
 ```
 
 Dragging with the mouse also selects. The viewer reports the nearest Markdown block source range and the selected rendered text. The request panel is a native text view prefilled with the full prompt in the same shape as the existing Neovim integration: source file, line range, an empty `Request:` section where the cursor starts, and the `<selection>` tags. Edit any part of it, then press Shift+Enter to send exactly that text, or Esc to cancel. Start the first line with `/btw` for a side chat request (supported by both Codex and Claude Code). A file reload clears the selection, and a revision check prevents a stale WebKit selection from being sent after a reload.
