@@ -51,7 +51,7 @@ v         Toggle visual selection; motions extend it. Esc leaves it.
 <Space>aa Open the request panel for the current selection.
 ```
 
-Dragging with the mouse also selects. The viewer reports the nearest Markdown block source range and the selected rendered text. In the request panel, type the request (or `/btw …`), press Shift+Enter to send, or Esc to cancel. The prompt has the same shape as the existing Neovim integration, including `/btw` side chat requests (supported by both Codex and Claude Code), and includes the source file, line range, and `<selection>` tags. A file reload clears the selection, and a revision check prevents a stale WebKit selection from being sent after a reload.
+Dragging with the mouse also selects. The viewer reports the nearest Markdown block source range and the selected rendered text. The request panel is a native text view prefilled with the full prompt in the same shape as the existing Neovim integration: source file, line range, an empty `Request:` section where the cursor starts, and the `<selection>` tags. Edit any part of it, then press Shift+Enter to send exactly that text, or Esc to cancel. Start the first line with `/btw` for a side chat request (supported by both Codex and Claude Code). A file reload clears the selection, and a revision check prevents a stale WebKit selection from being sent after a reload.
 
 Links are rendered with HTML disabled. Only `http`, `https`, and `mailto` links explicitly clicked by the user are opened externally; arbitrary WebKit file navigation is rejected. Markdown images are limited to safe URL schemes by markdown-it's renderer policy.
 

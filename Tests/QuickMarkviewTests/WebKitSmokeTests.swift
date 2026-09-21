@@ -16,6 +16,14 @@ final class WebKitSmokeTests: XCTestCase, WKNavigationDelegate, WKScriptMessageH
         XCTAssertFalse(AppDelegate.closesViewer(characters: "w", firstResponder: nil))
     }
 
+    func testRequestCursorStartsOnEmptyRequestLine() {
+        let prompt = PromptBuilder.build(context: MarkdownDocument(url: URL(fileURLWithPath: "/tmp/a.md"), text: "Hello"), range: SourceRange(startLine: 1, endLine: 1), request: "", selectedText: "Hello")
+        let cursor = ViewerViewController.requestCursor(in: prompt)
+        XCTAssertTrue((prompt as NSString).substring(to: cursor).hasSuffix("Request:\n"))
+        XCTAssertTrue((prompt as NSString).substring(from: cursor).hasPrefix("\n\nSelected content:\n<selection>\nHello\n</selection>"))
+        XCTAssertEqual(ViewerViewController.requestCursor(in: "no marker"), 0)
+    }
+
     func testViewerLoadsBundledMarkdownAndMermaidLibraries() {
         let root = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()

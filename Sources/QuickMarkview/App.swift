@@ -122,7 +122,7 @@ final class ViewerViewController: NSViewController, WKNavigationDelegate, WKScri
         NSLayoutConstraint.activate([
             toolbar.topAnchor.constraint(equalTo: root.topAnchor), toolbar.leadingAnchor.constraint(equalTo: root.leadingAnchor), toolbar.trailingAnchor.constraint(equalTo: root.trailingAnchor), toolbar.heightAnchor.constraint(equalToConstant: 46),
             page.topAnchor.constraint(equalTo: toolbar.bottomAnchor), page.leadingAnchor.constraint(equalTo: root.leadingAnchor), page.trailingAnchor.constraint(equalTo: root.trailingAnchor), page.bottomAnchor.constraint(equalTo: root.bottomAnchor),
-            panel.centerXAnchor.constraint(equalTo: root.centerXAnchor), panel.widthAnchor.constraint(equalTo: root.widthAnchor, multiplier: 0.6), panel.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -24), panel.heightAnchor.constraint(equalToConstant: 150)
+            panel.centerXAnchor.constraint(equalTo: root.centerXAnchor), panel.widthAnchor.constraint(equalTo: root.widthAnchor, multiplier: 0.7), panel.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -24), panel.heightAnchor.constraint(equalTo: root.heightAnchor, multiplier: 0.5)
         ])
         self.view = root
     }
@@ -177,10 +177,19 @@ final class ViewerViewController: NSViewController, WKNavigationDelegate, WKScri
     }
 
     private func showRequestPanel() {
-        guard let selection, selection.revision == revision else { statusLabel.stringValue = "Select text with v first."; return }
-        requestHint.stringValue = "Lines \(selection.sourceRange.startLine)-\(selection.sourceRange.endLine) · Request (or /btw …) · ⇧↩ send · esc cancel"
+        guard let document, let selection, selection.revision == revision else { statusLabel.stringValue = "Select text with v first."; return }
+        let prompt = PromptBuilder.build(context: document, range: selection.sourceRange, request: "", selectedText: selection.text)
+        requestHint.stringValue = "Lines \(selection.sourceRange.startLine)-\(selection.sourceRange.endLine) · first line /btw for side chat · ⇧↩ send · esc cancel"
+        requestView.string = prompt
+        requestView.setSelectedRange(NSRange(location: Self.requestCursor(in: prompt), length: 0))
+        requestView.scrollRangeToVisible(requestView.selectedRange())
         requestPanel.isHidden = false
         view.window?.makeFirstResponder(requestView)
+    }
+
+    static func requestCursor(in prompt: String) -> Int {
+        let marker = (prompt as NSString).range(of: "Request:\n")
+        return marker.location == NSNotFound ? 0 : NSMaxRange(marker)
     }
 
     private func hideRequestPanel() {
@@ -256,7 +265,8 @@ final class ViewerViewController: NSViewController, WKNavigationDelegate, WKScri
         // watcher event and the user's keystroke and invalidates its selection.
         guard let current = try? String(contentsOf: document.url, encoding: .utf8) else { statusLabel.stringValue = "The file could not be read before sending."; return }
         if current != document.text { reloadAfterExternalChange(); return }
-        let prompt = PromptBuilder.build(context: document, range: selection.sourceRange, request: requestView.string, selectedText: selection.text)
+        let prompt = requestView.string
+        guard !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { statusLabel.stringValue = "Prompt is empty."; return }
         isSending = true; statusLabel.stringValue = "Rechecking WezTerm panes…"
         service.listPanes { [weak self] result in DispatchQueue.main.async {
             guard let self else { return }
@@ -273,7 +283,7 @@ final class ViewerViewController: NSViewController, WKNavigationDelegate, WKScri
                         guard let self else { return }
                         self.isSending = false
                         switch result {
-                        case .success: self.statusLabel.stringValue = "Sent to pane \(target.paneID)."; self.requestView.string = ""; self.hideRequestPanel()
+                        case .success: self.statusLabel.stringValue = "Sent to pane \(target.paneID)."; self.hideRequestPanel()
                         case .failure(let error): self.statusLabel.stringValue = error.localizedDescription
                         }
                     } }
