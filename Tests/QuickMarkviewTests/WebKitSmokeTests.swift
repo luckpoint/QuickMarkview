@@ -16,6 +16,11 @@ final class WebKitSmokeTests: XCTestCase, WKNavigationDelegate, WKScriptMessageH
         XCTAssertFalse(AppDelegate.closesViewer(characters: "w", firstResponder: nil))
     }
 
+    func testLaunchFrameFillsLeftTwoThirdsOfScreen() {
+        let frame = AppDelegate.launchFrame(in: NSRect(x: 0, y: 25, width: 1800, height: 1100))
+        XCTAssertEqual(frame, NSRect(x: 0, y: 25, width: 1200, height: 1100))
+    }
+
     func testRequestCursorStartsOnEmptyRequestLine() {
         let prompt = PromptBuilder.build(context: MarkdownDocument(url: URL(fileURLWithPath: "/tmp/a.md"), text: "Hello"), range: SourceRange(startLine: 1, endLine: 1), request: "", selectedText: "Hello")
         let cursor = ViewerViewController.requestCursor(in: prompt)

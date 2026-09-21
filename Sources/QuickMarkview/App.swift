@@ -35,7 +35,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.title = "QuickMarkview"
         window.setContentSize(NSSize(width: 1200, height: 820))
         window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
-        window.center()
+        if let screen = NSScreen.main { window.setFrame(Self.launchFrame(in: screen.visibleFrame), display: false) }
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
@@ -48,6 +48,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     static func closesViewer(characters: String?, firstResponder: NSResponder?) -> Bool {
         characters == "q" && !(firstResponder is NSText)
+    }
+
+    static func launchFrame(in screen: NSRect) -> NSRect {
+        NSRect(x: screen.minX, y: screen.minY, width: (screen.width * 2 / 3).rounded(), height: screen.height)
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {
