@@ -16,16 +16,6 @@ final class WebKitSmokeTests: XCTestCase, WKNavigationDelegate, WKScriptMessageH
         XCTAssertFalse(AppDelegate.closesViewer(characters: "w", firstResponder: nil))
     }
 
-    func testSendNeedsOnlyReviewedPromptAndTarget() {
-        let prompt = PromptBuilder.build(context: MarkdownDocument(url: URL(fileURLWithPath: "/tmp/a.md"), text: "Hello"), range: SourceRange(startLine: 1, endLine: 1), request: "")
-        XCTAssertTrue(ViewerViewController.canSend(prompt: prompt, selectionIsCurrent: true, hasTarget: true, hasOrigin: true, isSending: false))
-        XCTAssertFalse(ViewerViewController.canSend(prompt: " \n", selectionIsCurrent: true, hasTarget: true, hasOrigin: true, isSending: false))
-        XCTAssertFalse(ViewerViewController.canSend(prompt: prompt, selectionIsCurrent: false, hasTarget: true, hasOrigin: true, isSending: false))
-        XCTAssertFalse(ViewerViewController.canSend(prompt: prompt, selectionIsCurrent: true, hasTarget: false, hasOrigin: true, isSending: false))
-        XCTAssertFalse(ViewerViewController.canSend(prompt: prompt, selectionIsCurrent: true, hasTarget: true, hasOrigin: false, isSending: false))
-        XCTAssertFalse(ViewerViewController.canSend(prompt: prompt, selectionIsCurrent: true, hasTarget: true, hasOrigin: true, isSending: true))
-    }
-
     func testViewerLoadsBundledMarkdownAndMermaidLibraries() {
         let root = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
@@ -43,15 +33,17 @@ final class WebKitSmokeTests: XCTestCase, WKNavigationDelegate, WKScriptMessageH
         XCTAssertEqual(result?.lastPathComponent, "viewer.html")
     }
 
-    func testViewerLayoutFillsWindowAndKeepsBrowserVisible() {
+    func testViewerLayoutFillsWindowBelowToolbarWithRequestPanelHidden() {
         let controller = ViewerViewController(options: try! LaunchOptions(arguments: []))
         controller.loadView()
         controller.view.frame = NSRect(x: 0, y: 0, width: 1200, height: 820)
         controller.view.layoutSubtreeIfNeeded()
         let webViews = descendants(of: controller.view).compactMap { $0 as? WKWebView }
         XCTAssertEqual(webViews.count, 1)
-        XCTAssertGreaterThan(webViews[0].frame.width, 1100)
-        XCTAssertGreaterThan(webViews[0].frame.height, 300)
+        XCTAssertEqual(webViews[0].frame.width, 1200)
+        XCTAssertEqual(webViews[0].frame.height, 820 - 46)
+        XCTAssertTrue(controller.requestPanel.isHidden)
+        XCTAssertTrue(descendants(of: controller.view).compactMap { $0 as? NSTextField }.allSatisfy { !$0.isEditable })
     }
 
     private func descendants(of view: NSView) -> [NSView] {

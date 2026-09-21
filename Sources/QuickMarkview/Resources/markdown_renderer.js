@@ -64,18 +64,88 @@
     return node && node.closest ? node.closest("[data-source-start]") : null;
   }
 
+  const post = message => window.webkit.messageHandlers.quickMarkview.postMessage(message);
+
   function sendSelection() {
     const selection = window.getSelection();
     if (!selection || selection.isCollapsed || !selection.toString().trim()) {
-      window.webkit.messageHandlers.quickMarkview.postMessage({type: "selectionCleared", revision: window.quickMarkview.currentRevision});
+      post({type: "selectionCleared", revision: window.quickMarkview.currentRevision});
       return;
     }
     const nodes = [nearest(selection.anchorNode), nearest(selection.focusNode)].filter(Boolean);
     if (!nodes.length) return;
     const starts = nodes.map(node => Number(node.dataset.sourceStart));
     const ends = nodes.map(node => Number(node.dataset.sourceEnd));
-    window.webkit.messageHandlers.quickMarkview.postMessage({type: "selection", text: selection.toString(), lineStart: Math.min(...starts), lineEnd: Math.max(...ends), revision: window.quickMarkview.currentRevision});
+    post({type: "selection", text: selection.toString(), lineStart: Math.min(...starts), lineEnd: Math.max(...ends), revision: window.quickMarkview.currentRevision});
   }
+
+  // The DOM selection is the Vim cursor; #cursor only draws its focus end.
+  let visual = false, pending = "", saved = null;
+  const ESC = "\x1b";
+
+  function rememberSelection() {
+    const selection = window.getSelection();
+    if (selection.focusNode) saved = [selection.anchorNode, selection.anchorOffset, selection.focusNode, selection.focusOffset];
+  }
+
+  function restoreSelection() {
+    if (!window.getSelection().focusNode && saved && saved[2].isConnected) window.getSelection().setBaseAndExtent(...saved);
+  }
+
+  function drawCursor() {
+    const selection = window.getSelection(), mark = document.getElementById("cursor"), node = selection.focusNode;
+    const range = document.createRange();
+    if (node) range.setStart(node, selection.focusOffset);
+    if (node && node.nodeType === 3 && selection.focusOffset < node.length) range.setEnd(node, selection.focusOffset + 1);
+    const rect = node && range.getClientRects()[0];
+    mark.hidden = !rect;
+    if (!rect) return;
+    Object.assign(mark.style, {left: `${rect.left + scrollX}px`, top: `${rect.top + scrollY}px`, width: `${Math.max(rect.width, 8)}px`, height: `${rect.height}px`});
+    mark.scrollIntoView({block: "nearest"});
+  }
+
+  function placeCaret(element) {
+    const text = element && document.createTreeWalker(element, NodeFilter.SHOW_TEXT).nextNode();
+    if (text) window.getSelection().collapse(text, 0);
+  }
+
+  function motion(direction, granularity) {
+    window.getSelection().modify(visual ? "extend" : "move", direction, granularity);
+  }
+
+  function leaveVisual() {
+    const selection = window.getSelection();
+    visual = false;
+    if (selection.focusNode) selection.collapse(selection.focusNode, selection.focusOffset);
+  }
+
+  const bindings = {
+    h: () => motion("backward", "character"),
+    j: () => motion("forward", "line"),
+    k: () => motion("backward", "line"),
+    l: () => motion("forward", "character"),
+    "0": () => motion("backward", "lineboundary"),
+    $: () => motion("forward", "lineboundary"),
+    gg: () => motion("backward", "documentboundary"),
+    G: () => motion("forward", "documentboundary"),
+    v: () => { if (visual) leaveVisual(); else visual = true; },
+    [ESC]: leaveVisual,
+    " aa": () => post({type: "requestInput"})
+  };
+  const isPrefix = keys => Object.keys(bindings).some(sequence => sequence.startsWith(keys));
+
+  document.addEventListener("keydown", event => {
+    if (event.metaKey || event.ctrlKey || event.altKey || event.isComposing) return;
+    const key = event.key === "Escape" ? ESC : event.key;
+    if (key.length !== 1) return;
+    const keys = isPrefix(pending + key) ? pending + key : key;
+    pending = "";
+    if (!isPrefix(keys)) return;
+    event.preventDefault();
+    if (bindings[keys]) bindings[keys](); else pending = keys;
+  });
+  document.addEventListener("mousedown", () => { visual = false; });
+  window.addEventListener("focus", restoreSelection);
 
   window.quickMarkview = {
     currentLine: null,
@@ -101,7 +171,14 @@
       const diagrams = Array.from(document.querySelectorAll(".mermaid"));
       const renders = diagrams.map(container => renderMermaid(container, version));
       this.currentLine = line || null; this.currentRevision = Number(revision || 0);
-      Promise.all(renders).then(() => requestAnimationFrame(() => requestAnimationFrame(() => { if (version !== this.renderVersion) return; if (this.currentLine) this.scrollToLine(this.currentLine); else window.scrollTo(0, oldScroll); window.webkit.messageHandlers.quickMarkview.postMessage({type: "ready", revision: this.currentRevision}); })));
+      Promise.all(renders).then(() => requestAnimationFrame(() => requestAnimationFrame(() => {
+        if (version !== this.renderVersion) return;
+        let caret;
+        if (this.currentLine) caret = this.scrollToLine(this.currentLine);
+        else { window.scrollTo(0, oldScroll); caret = Array.from(document.querySelectorAll("[data-source-start]")).find(node => node.getBoundingClientRect().top >= 0); }
+        visual = false; placeCaret(caret);
+        post({type: "ready", revision: this.currentRevision});
+      })));
     },
     scrollToLine: function (line) {
       const wanted = Number(line);
@@ -109,8 +186,9 @@
       const fallback = Array.from(document.querySelectorAll("[data-source-start]")).filter(node => Number(node.dataset.sourceStart) <= wanted).pop();
       const element = mapped[0] || fallback || document.querySelector("[data-source-start]");
       if (element) element.scrollIntoView({block: "start"});
+      return element;
     },
     selectedText: sendSelection
   };
-  document.addEventListener("selectionchange", sendSelection);
+  document.addEventListener("selectionchange", () => { rememberSelection(); sendSelection(); drawCursor(); });
 })();

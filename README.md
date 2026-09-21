@@ -24,7 +24,7 @@ The command line options are:
 path              Markdown file to open. With no path, the Open button is shown.
 ```
 
-The originating pane must be the leftmost pane in its current WezTerm tab. QuickMarkview calls `wezterm cli list --format json`, keeps only panes in that tab to the right of the origin, and accepts at most two. If two targets exist, choose one in the target menu before sending. The Send button performs the same lookup again immediately before sending. It sends the reviewed prompt as stdin to `send-text`, waits 50 ms, then submits a literal carriage return with `--no-paste`. A prompt starting with `/btw` first types `/btw ` with `--no-paste` and pastes only the rest, because Claude Code does not run a slash command that arrives inside a paste.
+The originating pane must be the leftmost pane in its current WezTerm tab. QuickMarkview calls `wezterm cli list --format json`, keeps only panes in that tab to the right of the origin, and accepts at most two. If two targets exist, choose one in the target menu before sending. Shift+Enter performs the same lookup again immediately before sending. It sends the reviewed prompt as stdin to `send-text`, waits 50 ms, then submits a literal carriage return with `--no-paste`. A prompt starting with `/btw` first types `/btw ` with `--no-paste` and pastes only the rest, because Claude Code does not run a slash command that arrives inside a paste.
 
 ## Neovim example
 
@@ -37,11 +37,21 @@ vim.keymap.set("n", "<leader>am", quickmarkview.open, { desc = "Open Markdown in
 
 The example passes the current buffer, cursor line, and `WEZTERM_PANE` explicitly. It uses `open -n -a` to launch a fresh app instance and does not interpolate the path into a shell command. Set `quickmarkview.app` to an absolute app path if the bundle is not installed in `/Applications`.
 
-Press `q` in the viewer to close it. `q` is typed normally while the request field or review panel has focus.
+Press `q` in the viewer to close it. `q` is typed normally while the request panel has focus.
 
 ## Selection and sending
 
-Drag across rendered text. The viewer reports the nearest Markdown block source range and the selected rendered text. The editable review panel builds the same prompt shape as the existing Neovim integration, including `/btw` side chat requests (supported by both Codex and Claude Code), and includes the source file, line range, and `<selection>` tags. Type the request in the toolbar field or directly in the review panel; Send is enabled once a selection, a target pane, and a non-empty prompt exist. Editing the prompt is local until Send is pressed. A file reload clears the selection and review text, and a revision check prevents a stale WebKit selection from being sent after a reload.
+The viewer has a Vim-style cursor:
+
+```text
+h j k l   Move by character / line.
+0 $       Line start / end.
+gg G      Document start / end.
+v         Toggle visual selection; motions extend it. Esc leaves it.
+<Space>aa Open the request panel for the current selection.
+```
+
+Dragging with the mouse also selects. The viewer reports the nearest Markdown block source range and the selected rendered text. In the request panel, type the request (or `/btw …`), press Shift+Enter to send, or Esc to cancel. The prompt has the same shape as the existing Neovim integration, including `/btw` side chat requests (supported by both Codex and Claude Code), and includes the source file, line range, and `<selection>` tags. A file reload clears the selection, and a revision check prevents a stale WebKit selection from being sent after a reload.
 
 Links are rendered with HTML disabled. Only `http`, `https`, and `mailto` links explicitly clicked by the user are opened externally; arbitrary WebKit file navigation is rejected. Markdown images are limited to safe URL schemes by markdown-it's renderer policy.
 
