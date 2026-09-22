@@ -51,7 +51,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     static func launchFrame(in screen: NSRect) -> NSRect {
-        NSRect(x: screen.minX, y: screen.minY, width: (screen.width * 2 / 3).rounded(), height: screen.height)
+        NSRect(x: screen.minX, y: screen.minY, width: (screen.width * 2 / 3).rounded() - 5, height: screen.height)
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {

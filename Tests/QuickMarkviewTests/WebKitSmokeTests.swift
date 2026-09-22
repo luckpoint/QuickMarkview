@@ -18,7 +18,7 @@ final class WebKitSmokeTests: XCTestCase, WKNavigationDelegate, WKScriptMessageH
 
     func testLaunchFrameFillsLeftTwoThirdsOfScreen() {
         let frame = AppDelegate.launchFrame(in: NSRect(x: 0, y: 25, width: 1800, height: 1100))
-        XCTAssertEqual(frame, NSRect(x: 0, y: 25, width: 1200, height: 1100))
+        XCTAssertEqual(frame, NSRect(x: 0, y: 25, width: 1195, height: 1100))
     }
 
     func testRequestCursorStartsOnEmptyRequestLine() {
