@@ -1,4 +1,3 @@
-
 ![QuickMarkview](img/logo.png)
 
 # QuickMarkview
