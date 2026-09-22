@@ -1,3 +1,5 @@
+![QuickMarkview](img/logo.png)
+
 # QuickMarkview
 
 QuickMarkview is a macOS Markdown viewer for the Neovim + WezTerm + coding-agent (Codex or Claude Code) workflow. It renders Markdown and Mermaid locally, follows external saves (including atomic rename saves), opens at a source line, and maps a selection in the rendered document back to source line numbers.
