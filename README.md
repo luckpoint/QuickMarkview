@@ -51,7 +51,7 @@ vim.keymap.set("n", "<leader>am", quickmarkview.open, { desc = "Open Markdown in
 
 The example passes the current buffer, cursor line, and `WEZTERM_PANE` explicitly. It uses `open -n -a` to launch a fresh app instance and does not interpolate the path into a shell command. Set `quickmarkview.app` to an absolute app path if the bundle is not installed in `/Applications`.
 
-The window opens over the left two thirds of the screen at full height. Press `q` in the viewer to close it. `q` is typed normally while the request panel has focus.
+The window opens over the left two thirds of the screen at full height. Press `q` in the viewer to close it. `q` is typed normally while the request panel has focus. The table-of-contents sidebar starts hidden; press ⌘L (View › Toggle Sidebar) to show or hide it.
 
 ## Selection and sending
 

@@ -95,6 +95,17 @@ final class VimKeyTests: XCTestCase, WKNavigationDelegate, WKScriptMessageHandle
         XCTAssertEqual(js(view, "String(document.dispatchEvent(new KeyboardEvent('keydown', {key: 'f', ctrlKey: true, cancelable: true})))"), "false")
     }
 
+    func testSidebarStartsHiddenAndToggles() {
+        let view = loadViewer("# One\n\ntext\n")
+        let width = "String(document.getElementById('toc').offsetWidth)"
+        XCTAssertEqual(js(view, width), "0")
+        _ = js(view, "window.quickMarkview.toggleSidebar(); ''")
+        XCTAssertEqual(js(view, width), "210")
+        XCTAssertEqual(js(view, "document.querySelector('#toc a').textContent"), "One")
+        _ = js(view, "window.quickMarkview.toggleSidebar(); ''")
+        XCTAssertEqual(js(view, width), "0")
+    }
+
     private func loadViewer(_ markdown: String) -> WKWebView {
         let root = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()

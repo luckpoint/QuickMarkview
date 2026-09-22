@@ -16,6 +16,12 @@ final class WebKitSmokeTests: XCTestCase, WKNavigationDelegate, WKScriptMessageH
         XCTAssertFalse(AppDelegate.closesViewer(characters: "w", firstResponder: nil))
     }
 
+    func testCommandLTogglesSidebar() {
+        let item = AppDelegate.mainMenu().items.flatMap { $0.submenu?.items ?? [] }.first { $0.keyEquivalent == "l" }
+        XCTAssertEqual(item?.keyEquivalentModifierMask, .command)
+        XCTAssertEqual(item?.action, #selector(ViewerViewController.toggleSidebar(_:)))
+    }
+
     func testLaunchFrameFillsLeftTwoThirdsOfScreen() {
         let frame = AppDelegate.launchFrame(in: NSRect(x: 0, y: 25, width: 1800, height: 1100))
         XCTAssertEqual(frame, NSRect(x: 0, y: 25, width: 1195, height: 1100))

@@ -255,6 +255,11 @@
       if (element) element.scrollIntoView({block: "start"});
       return element;
     },
+    toggleSidebar: function () {
+      const toc = document.getElementById("toc");
+      toc.hidden = !toc.hidden;
+      drawCursor();
+    },
     selectedText: sendSelection
   };
   document.addEventListener("selectionchange", () => { rememberSelection(); sendSelection(); drawCursor(); });

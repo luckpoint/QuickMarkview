@@ -58,7 +58,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let url = urls.first { controller?.open(url: url, line: nil) }
     }
 
-    private func installMenus() {
+    private func installMenus() { NSApp.mainMenu = Self.mainMenu() }
+
+    static func mainMenu() -> NSMenu {
         let menu = NSMenu()
         let appItem = NSMenuItem(); let appMenu = NSMenu()
         appMenu.addItem(withTitle: "About QuickMarkview", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
@@ -72,7 +74,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         editMenu.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
         editMenu.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
         editItem.submenu = editMenu; menu.addItem(editItem)
-        NSApp.mainMenu = menu
+
+        let viewItem = NSMenuItem(); let viewMenu = NSMenu(title: "View")
+        viewMenu.addItem(withTitle: "Toggle Sidebar", action: #selector(ViewerViewController.toggleSidebar(_:)), keyEquivalent: "l")
+        viewItem.submenu = viewMenu; menu.addItem(viewItem)
+        return menu
     }
 
     private func showFatal(_ message: String) {
@@ -243,6 +249,8 @@ final class ViewerViewController: NSViewController, WKNavigationDelegate, WKScri
     }
 
     @objc private func targetChanged(_ sender: Any?) { explicitTargetID = targetPopup.selectedItem?.representedObject as? Int }
+
+    @objc func toggleSidebar(_ sender: Any?) { webView.evaluateJavaScript("window.quickMarkview.toggleSidebar();", completionHandler: nil) }
 
     private func refreshTargets() {
         guard let originPaneID else { statusLabel.stringValue = "WEZTERM_PANE is not set; open from WezTerm or pass --pane."; return }
