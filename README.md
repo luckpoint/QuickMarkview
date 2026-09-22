@@ -1,3 +1,4 @@
+
 ![QuickMarkview](img/logo.png)
 
 # QuickMarkview
@@ -5,6 +6,16 @@
 QuickMarkview is a macOS Markdown viewer for the Neovim + WezTerm + coding-agent (Codex or Claude Code) workflow. It renders Markdown and Mermaid locally, follows external saves (including atomic rename saves), opens at a source line, and maps a selection in the rendered document back to source line numbers.
 
 The viewer loads the official `markdown-it@14.1.0` and `mermaid@11.12.1` distribution bundles from app resources. No network request is made while viewing a document: remote images are blocked. The WebKit page is loaded once; subsequent saves replace its DOM through a JavaScript bridge and preserve the current scroll position. Mermaid layout is awaited before the initial line jump.
+
+## Demo
+
+https://github.com/user-attachments/assets/7da0fb62-7450-498b-a194-af7dd13b87ee
+
+Demo: Split WezTerm window with Neovim on the left and Claude Code on the right.
+1. Code Selection: The user visually selects a block of Swift code in Neovim.
+2. Payload Generation: A modal generates a structured prompt containing the file path, line range, and selected code, where the user adds the request (Explain).
+3. Inter-pane Transfer: The prompt is sent directly into the Claude Code pane via WezTerm CLI.
+4. Agent Execution: Claude Code receives the context, begins reasoning, and runs shell commands to analyze the codebase and explain the snippet.
 
 ## Build and run
 
