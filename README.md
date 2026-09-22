@@ -69,4 +69,6 @@ swift test
 
 The tests cover prompt formatting and `/btw`, source-range clamping, pane ordering/target validation, pane ID zero, CLI parsing, JSON decoding, in-place watcher events, and atomic replacement saves. They never call the real WezTerm CLI or send a prompt.
 
-Third-party notices and licenses are listed in `THIRD_PARTY_NOTICES.md`.
+## License
+
+QuickMarkview is released under the MIT License. See `LICENSE`. Third-party notices and licenses are listed in `THIRD_PARTY_NOTICES.md`.
