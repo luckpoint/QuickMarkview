@@ -2,14 +2,22 @@ local M = {}
 
 M.app = "QuickMarkview"
 
+local function source_position()
+  local table_wrap = package.loaded["markdown-table-wrap"]
+  local state = table_wrap and table_wrap.get_state(0)
+  if state and state.source_path then
+    return state.source_path, state.cursor.source_lnum
+  end
+  return vim.fn.expand("%:p"), vim.api.nvim_win_get_cursor(0)[1]
+end
+
 function M.open()
-  local path = vim.fn.expand("%:p")
+  local path, line = source_position()
   if path == "" then
     vim.notify("QuickMarkview: current buffer has no file", vim.log.levels.ERROR)
     return
   end
 
-  local line = vim.api.nvim_win_get_cursor(0)[1]
   local pane = vim.env.WEZTERM_PANE
   if not pane or pane == "" then
     vim.notify("QuickMarkview: WEZTERM_PANE is not set", vim.log.levels.ERROR)
