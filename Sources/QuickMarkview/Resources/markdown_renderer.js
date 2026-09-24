@@ -92,6 +92,17 @@
     });
   }
 
+  function imageSources(tokens) {
+    const sources = new Set();
+    tokens.forEach(token => {
+      if (token.type !== "inline" || !token.children) return;
+      token.children.forEach(child => {
+        if (child.type === "image" && child.attrGet("src")) sources.add(child.attrGet("src"));
+      });
+    });
+    return Array.from(sources);
+  }
+
   function nearest(node) {
     while (node && node.nodeType === 3) node = node.parentElement;
     return node && node.closest ? node.closest("[data-source-start]") : null;
@@ -261,7 +272,7 @@
 
   document.addEventListener("keydown", event => {
     if (event.metaKey || event.altKey || event.isComposing) return;
-    const key = event.key === "Tab" && !event.shiftKey ? TAB : event.key === "Escape" ? ESC : event.ctrlKey ? controls[event.key] : event.key;
+    const key = event.key === "Escape" ? ESC : event.ctrlKey ? controls[event.key] : event.key;
     if (!key || key.length !== 1) return;
     const keys = isPrefix(pending + key) ? pending + key : key;
     pending = "";
@@ -331,8 +342,8 @@
       if (tokens) tokens.forEach((token, index) => { if (token.type === "heading_open") { const id = `heading-${token.map ? token.map[0] + 1 : index + 1}`; const heading = document.querySelector(`h${token.tag.slice(1)}[data-source-start="${token.map[0] + 1}"]`); if (heading) heading.id = id; } });
       const diagrams = Array.from(document.querySelectorAll(".mermaid"));
       const renders = diagrams.map(container => renderMermaid(container, version));
-      this.currentLine = line || null; this.currentRevision = Number(revision || 0);
-      Promise.all(renders).then(() => requestAnimationFrame(() => requestAnimationFrame(() => {
+      this.currentLine = line || null;
+      Promise.all([...renders, this.imagesReady]).then(() => requestAnimationFrame(() => requestAnimationFrame(() => {
         if (version !== this.renderVersion) return;
         let caret;
         if (this.currentLine) caret = this.scrollToLine(this.currentLine);
