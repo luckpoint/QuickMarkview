@@ -4,12 +4,80 @@ public enum DocumentKind: Equatable, Sendable {
     case markdown
     case code(language: String)
 
+    public static let markdownExtensions: Set<String> = ["md", "markdown", "mdown", "mkd"]
+
     public static func detect(url: URL) -> DocumentKind {
-        let markdownExtensions: Set<String> = ["md", "markdown", "mdown", "mkd"]
         let fileName = url.lastPathComponent
         let extensionOrName = url.pathExtension.isEmpty ? fileName : url.pathExtension
         let language = extensionOrName.lowercased()
         return markdownExtensions.contains(language) ? .markdown : .code(language: language)
+    }
+}
+
+public enum ProjectRoot {
+    private static let markers = [".git", ".hg", ".jj"]
+
+    /// Finds the nearest repository directory, starting with `directory`.
+    public static func find(from directory: URL) -> URL? {
+        let fileManager = FileManager.default
+        var current = directory.standardizedFileURL
+        var isDirectory: ObjCBool = false
+        if fileManager.fileExists(atPath: current.path, isDirectory: &isDirectory), !isDirectory.boolValue {
+            current.deleteLastPathComponent()
+        }
+        while true {
+            if markers.contains(where: { fileManager.fileExists(atPath: current.appendingPathComponent($0).path) }) {
+                return current
+            }
+            let parent = current.deletingLastPathComponent()
+            guard parent.path != current.path else { return nil }
+            current = parent
+        }
+    }
+}
+
+public enum FuzzyMatcher {
+    private static let boundaries: Set<Character> = ["/", "_", "-", "."]
+    public static func score(query: String, candidate: String) -> Int? {
+        match(query: query, candidate: candidate)?.score
+    }
+
+    /// Scores a case-insensitive subsequence match and returns candidate
+    /// character offsets suitable for highlighting.
+    public static func match(query: String, candidate: String) -> (score: Int, positions: [Int])? {
+        let tokens = query.split(whereSeparator: \.isWhitespace).map(String.init)
+        guard !tokens.isEmpty else { return (0, []) }
+
+        let characters = Array(candidate)
+        let fileNameStart = (candidate.lastIndex(of: "/").map { candidate.distance(from: candidate.startIndex, to: $0) + 1 }) ?? 0
+        var totalScore = 0
+        var allPositions = Set<Int>()
+
+        for token in tokens {
+            let needle = Array(token)
+            guard !needle.isEmpty else { continue }
+            var cursor = 0
+            var priorPosition: Int?
+            var tokenScore = 0
+            var tokenPositions: [Int] = []
+
+            for wanted in needle {
+                guard let position = characters.indices.dropFirst(cursor).first(where: { characters[$0].lowercased() == wanted.lowercased() }) else {
+                    return nil
+                }
+                tokenPositions.append(position)
+                tokenScore += 1
+                if let priorPosition, position == priorPosition + 1 { tokenScore += 5 }
+                if position == 0 || boundaries.contains(characters[position - 1]) { tokenScore += 8 }
+                if position >= fileNameStart { tokenScore += 3 }
+                if priorPosition == nil { tokenScore -= min(position, 10) }
+                priorPosition = position
+                cursor = position + 1
+            }
+            totalScore += tokenScore
+            allPositions.formUnion(tokenPositions)
+        }
+        return (totalScore, allPositions.sorted())
     }
 }
 

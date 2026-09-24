@@ -128,6 +128,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         let viewItem = NSMenuItem(); let viewMenu = NSMenu(title: "View")
         viewMenu.addItem(withTitle: "Toggle Sidebar", action: #selector(ViewerViewController.toggleSidebar(_:)), keyEquivalent: "l")
+        viewMenu.addItem(withTitle: "Go to Markdown File…", action: #selector(ViewerViewController.toggleFileFinder(_:)), keyEquivalent: "k")
+        viewMenu.items.last?.keyEquivalentModifierMask = [.command]
         viewItem.submenu = viewMenu; menu.addItem(viewItem)
         return menu
     }
@@ -154,6 +156,7 @@ final class ViewerViewController: NSViewController, WKNavigationDelegate, WKScri
     private var viewerDirectoryURL: URL?
     private var isSending = false
     private var alternate: (url: URL, line: Int)?
+    private var finderGeneration = 0
 
     private let pathLabel = NSTextField(labelWithString: "No file open")
     private let lineLabel = NSTextField(labelWithString: "")
@@ -164,6 +167,7 @@ final class ViewerViewController: NSViewController, WKNavigationDelegate, WKScri
     private let requestScroll = NSTextView.scrollableTextView()
     private var requestView: NSTextView { requestScroll.documentView as! NSTextView }
     let requestPanel = NSVisualEffectView()
+    private let fileFinder = FileFinderView(frame: .zero)
     private var webView: WKWebView!
 
     private static let idleStatus = "v/V select · Space a a request · q quit"
@@ -180,11 +184,15 @@ final class ViewerViewController: NSViewController, WKNavigationDelegate, WKScri
     override func loadView() {
         let root = NSView(); root.wantsLayer = true
         let toolbar = makeToolbar(), page = makeWebView(), panel = makeRequestPanel()
-        for subview in [toolbar, page, panel] { subview.translatesAutoresizingMaskIntoConstraints = false; root.addSubview(subview) }
+        fileFinder.isHidden = true
+        fileFinder.onChoose = { [weak self] url in self?.chooseMarkdownFile(url) }
+        fileFinder.onCancel = { [weak self] in self?.hideFileFinder() }
+        for subview in [toolbar, page, panel, fileFinder] { subview.translatesAutoresizingMaskIntoConstraints = false; root.addSubview(subview) }
         NSLayoutConstraint.activate([
             toolbar.topAnchor.constraint(equalTo: root.topAnchor), toolbar.leadingAnchor.constraint(equalTo: root.leadingAnchor), toolbar.trailingAnchor.constraint(equalTo: root.trailingAnchor), toolbar.heightAnchor.constraint(equalToConstant: 46),
             page.topAnchor.constraint(equalTo: toolbar.bottomAnchor), page.leadingAnchor.constraint(equalTo: root.leadingAnchor), page.trailingAnchor.constraint(equalTo: root.trailingAnchor), page.bottomAnchor.constraint(equalTo: root.bottomAnchor),
-            panel.centerXAnchor.constraint(equalTo: root.centerXAnchor), panel.widthAnchor.constraint(equalTo: root.widthAnchor, multiplier: 0.7), panel.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -24), panel.heightAnchor.constraint(equalTo: root.heightAnchor, multiplier: 0.5)
+            panel.centerXAnchor.constraint(equalTo: root.centerXAnchor), panel.widthAnchor.constraint(equalTo: root.widthAnchor, multiplier: 0.7), panel.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -24), panel.heightAnchor.constraint(equalTo: root.heightAnchor, multiplier: 0.5),
+            fileFinder.centerXAnchor.constraint(equalTo: root.centerXAnchor), fileFinder.centerYAnchor.constraint(equalTo: root.centerYAnchor, constant: 40), fileFinder.widthAnchor.constraint(equalTo: root.widthAnchor, multiplier: 0.6), fileFinder.heightAnchor.constraint(equalTo: root.heightAnchor, multiplier: 0.55)
         ])
         self.view = root
     }
@@ -320,6 +328,50 @@ final class ViewerViewController: NSViewController, WKNavigationDelegate, WKScri
     @objc private func targetChanged(_ sender: Any?) { explicitTargetID = targetPopup.selectedItem?.representedObject as? Int }
 
     @objc func toggleSidebar(_ sender: Any?) { webView.evaluateJavaScript("window.quickMarkview.toggleSidebar();", completionHandler: nil) }
+
+    @objc func toggleFileFinder(_ sender: Any?) {
+        if !fileFinder.isHidden {
+            hideFileFinder()
+            return
+        }
+        if !requestPanel.isHidden { hideRequestPanel() }
+        guard let document else {
+            statusLabel.stringValue = "Open a file first."
+            return
+        }
+        let directory = document.url.deletingLastPathComponent().standardizedFileURL
+        let root = ProjectRoot.find(from: directory) ?? directory
+        finderGeneration &+= 1
+        let generation = finderGeneration
+        fileFinder.currentFileURL = document.url
+        fileFinder.showIndexing(root: root)
+        MarkdownFileIndex.list(root: root, runner: CommandRunner(timeout: 5)) { [weak self] paths in
+            DispatchQueue.main.async {
+                guard let self, self.finderGeneration == generation, !self.fileFinder.isHidden else { return }
+                self.fileFinder.update(paths: paths)
+                self.fileFinder.focusSearchField()
+            }
+        }
+    }
+
+    private func hideFileFinder() {
+        finderGeneration &+= 1
+        fileFinder.isHidden = true
+        view.window?.makeFirstResponder(webView)
+    }
+
+    private func chooseMarkdownFile(_ url: URL) {
+        guard let currentURL = document?.url else { hideFileFinder(); return }
+        hideFileFinder()
+        webView.evaluateJavaScript("window.quickMarkview.visibleLine();") { [weak self] value, _ in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                let line = (value as? NSNumber)?.intValue ?? 1
+                if self.open(url: url, line: nil) { self.alternate = (currentURL, max(1, line)) }
+                self.view.window?.makeFirstResponder(self.webView)
+            }
+        }
+    }
 
     private func refreshTargets() {
         guard let originPaneID else { statusLabel.stringValue = "WEZTERM_PANE is not set; open from WezTerm or pass --pane."; return }

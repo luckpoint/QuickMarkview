@@ -331,6 +331,7 @@
       toc.hidden = !toc.hidden;
       drawCursor();
     },
+    visibleLine: visibleLine,
     selectedText: sendSelection
   };
   document.addEventListener("selectionchange", () => { rememberSelection(); sendSelection(); drawCursor(); });
