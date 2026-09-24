@@ -428,6 +428,27 @@ final class ViewerViewController: NSViewController, WKNavigationDelegate, WKScri
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
         guard let body = message.body as? [String: Any], let type = body["type"] as? String else { return }
         if type == "ready" { webReady = true; renderCurrentDocument(); return }
+        if type == "resolveImages" {
+            guard let document, let incomingRevision = body["revision"] as? Int,
+                  incomingRevision == Int(revision), let sources = body["sources"] as? [String] else { return }
+            var imageData: [String: String] = [:]
+            for source in sources {
+                // Remote images stay blocked. Resolve only local paths beside the
+                // Markdown file (or explicit file URLs) and pass bytes to WebKit.
+                guard !source.isEmpty,
+                      !source.hasPrefix("//"),
+                      !source.lowercased().hasPrefix("http:"),
+                      !source.lowercased().hasPrefix("https:"),
+                      let imageURL = LinkResolver.resolve(href: source, relativeTo: document.url),
+                      let data = try? Data(contentsOf: imageURL), !data.isEmpty else { continue }
+                let ext = imageURL.pathExtension
+                let mimeType = UTType(filenameExtension: ext)?.preferredMIMEType ?? "application/octet-stream"
+                imageData[source] = "data:\(mimeType);base64,\(data.base64EncodedString())"
+            }
+            guard let json = try? String(data: JSONEncoder().encode(imageData), encoding: .utf8) else { return }
+            webView.evaluateJavaScript("window.quickMarkview.setImageSources(\(incomingRevision), \(json));", completionHandler: nil)
+            return
+        }
         if type == "requestInput" { showRequestPanel(); return }
         if type == "openLink" {
             guard let href = body["href"] as? String, let document else { return }

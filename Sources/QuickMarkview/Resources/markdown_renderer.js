@@ -261,7 +261,7 @@
 
   document.addEventListener("keydown", event => {
     if (event.metaKey || event.altKey || event.isComposing) return;
-    const key = event.key === "Escape" ? ESC : event.ctrlKey ? controls[event.key] : event.key;
+    const key = event.key === "Tab" && !event.shiftKey ? TAB : event.key === "Escape" ? ESC : event.ctrlKey ? controls[event.key] : event.key;
     if (!key || key.length !== 1) return;
     const keys = isPrefix(pending + key) ? pending + key : key;
     pending = "";
@@ -280,6 +280,21 @@
     currentLine: null,
     currentRevision: 0,
     renderVersion: 0,
+    imagesReady: Promise.resolve(),
+    resolveImagesReady: null,
+    setImageSources: function (revision, sources) {
+      if (Number(revision) !== this.currentRevision) return;
+      const images = Array.from(document.querySelectorAll("img"));
+      images.forEach(image => {
+        const source = image.getAttribute("src");
+        if (source && sources[source]) image.src = sources[source];
+      });
+      const pending = images.filter(image => image.src.startsWith("data:") && !image.complete)
+        .map(image => new Promise(resolve => { image.onload = image.onerror = resolve; }));
+      Promise.all(pending).then(() => {
+        if (this.resolveImagesReady) { this.resolveImagesReady(); this.resolveImagesReady = null; }
+      });
+    },
     setDocument: function (source, line, revision, language) {
       const oldScroll = window.scrollY;
       const version = ++this.renderVersion;
@@ -294,6 +309,14 @@
         toc.innerHTML = "";
       } else {
         content.innerHTML = md.renderer.render(tokens, md.options, env);
+      }
+      this.currentRevision = Number(revision || 0);
+      if (tokens) {
+        const sources = imageSources(tokens);
+        if (sources.length) {
+          this.imagesReady = new Promise(resolve => { this.resolveImagesReady = resolve; });
+          post({type: "resolveImages", sources, revision: this.currentRevision});
+        } else this.imagesReady = Promise.resolve();
       }
       toc.innerHTML = tokens ? tokens.filter(t => t.type === "heading_open").map((open, n) => {
         const inlineToken = tokens[tokens.indexOf(open) + 1], label = inlineToken ? inlineToken.content : "";

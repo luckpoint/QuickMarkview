@@ -74,7 +74,7 @@ Dragging with the mouse also selects. The viewer reports the nearest Markdown bl
 
 Links are rendered with HTML disabled. Use `<C-]>` or click a local file link to follow it, then `<C-^>` to switch between the current and previous file. `http`, `https`, and `mailto` links open externally only when clicked or followed from the cursor. Arbitrary WebKit file navigation is rejected. Markdown images are limited to safe URL schemes by markdown-it's renderer policy.
 
-The current viewer does not resolve relative image paths against the opened Markdown file, so document images should be considered unsupported. Remote images are replaced with a local placeholder and never fetched.
+Markdown images are resolved relative to the opened Markdown file and displayed when the local image file exists. Image bytes are passed to the viewer directly, so the WebKit page does not need broader filesystem access. Remote images are replaced with a local placeholder and never fetched.
 
 ## Development
 
