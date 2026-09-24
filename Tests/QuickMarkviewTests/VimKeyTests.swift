@@ -7,6 +7,8 @@ final class VimKeyTests: XCTestCase, WKNavigationDelegate, WKScriptMessageHandle
     private var loaded: XCTestExpectation?
     private var awaited: (type: String, expectation: XCTestExpectation)?
     private var lastSelection: [String: Any]?
+    private var lastMessage: [String: Any]?
+    private var lastOpenLink: [String: Any]?
     private var result: String?
 
     func testMotionsVisualSelectionAndRequestSequence() {
@@ -106,6 +108,38 @@ final class VimKeyTests: XCTestCase, WKNavigationDelegate, WKScriptMessageHandle
         XCTAssertEqual(js(view, width), "0")
     }
 
+    func testCodeLinewiseSelectionReportsOriginalSourceLine() {
+        let view = loadViewer("placeholder\n")
+        _ = js(view, "window.quickMarkview.setDocument('let a = 1\\nlet b = 2\\nlet c = 3', null, 2, 'swift'); getSelection().collapse(document.querySelector('.line .hljs-keyword').firstChild, 0); ''")
+        press(view, "j", "V")
+        XCTAssertEqual(lastSelection?["lineStart"] as? Int, 2)
+        XCTAssertEqual(lastSelection?["lineEnd"] as? Int, 2)
+    }
+
+    func testFollowLocalLinksByControlKeyAndClickAndBackByControlCaret() {
+        let view = loadViewer("# One\n\n[x](./b.md)\n")
+        settleRender(view)
+        XCTAssertEqual(js(view, "getSelection().collapse(document.querySelector('#content a').firstChild, 0); getSelection().focusNode.parentElement.closest('a').getAttribute('href')"), "./b.md")
+        awaitMessage("openLink") { press(view, "<C-]>") }
+        XCTAssertEqual(lastOpenLink?["href"] as? String, "./b.md")
+        XCTAssertEqual(lastOpenLink?["fromLine"] as? Int, 3)
+
+        awaitMessage("openLink") { _ = js(view, "getSelection().collapse(document.querySelector('#content a').firstChild, 0); document.querySelector('#content a').click(); ''") }
+        XCTAssertEqual(lastOpenLink?["href"] as? String, "./b.md")
+
+        awaitMessage("back") { press(view, "<C-^>") }
+        XCTAssertEqual(lastMessage?["type"] as? String, "back")
+        XCTAssertEqual(lastMessage?["fromLine"] as? Int, 1)
+    }
+
+    func testControlRightBracketOutsideLinkDoesNothing() {
+        let view = loadViewer("plain text\n")
+        lastOpenLink = nil
+        lastMessage = nil
+        _ = js(view, "document.dispatchEvent(new KeyboardEvent('keydown', {key: ']', ctrlKey: true, cancelable: true})); ''")
+        XCTAssertNil(lastOpenLink)
+    }
+
     private func loadViewer(_ markdown: String) -> WKWebView {
         let root = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
@@ -138,6 +172,12 @@ final class VimKeyTests: XCTestCase, WKNavigationDelegate, WKScriptMessageHandle
         awaited = nil
     }
 
+    private func settleRender(_ view: WKWebView) {
+        let settled = expectation(description: "render settles")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { settled.fulfill() }
+        wait(for: [settled], timeout: 2)
+    }
+
     private func js(_ view: WKWebView, _ script: String) -> String? {
         let done = expectation(description: script)
         view.evaluateJavaScript(script) { [weak self] value, error in
@@ -153,7 +193,9 @@ final class VimKeyTests: XCTestCase, WKNavigationDelegate, WKScriptMessageHandle
 
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
         guard let body = message.body as? [String: Any], let type = body["type"] as? String else { return }
+        lastMessage = body
         if type == "selection" { lastSelection = body }
+        if type == "openLink" { lastOpenLink = body }
         if type == awaited?.type { awaited?.expectation.fulfill() }
     }
 }

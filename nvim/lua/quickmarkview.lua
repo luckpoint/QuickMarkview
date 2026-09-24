@@ -1,6 +1,7 @@
 local M = {}
 
 M.app = "QuickMarkview"
+M.resident = false
 
 local function source_position()
   local table_wrap = package.loaded["markdown-table-wrap"]
@@ -24,13 +25,22 @@ function M.open()
     return
   end
 
+  local arguments
+  if M.resident then
+    local request = "quickmarkview://open?path=" .. vim.uri_encode(path, "rfc3986")
+      .. "&line=" .. tostring(line) .. "&pane=" .. tostring(pane)
+    arguments = { "open", "-a", M.app, request, "--args", "--resident" }
+  else
+    arguments = {
+      "open", "-n", "-a", M.app, "--args",
+      "--line", tostring(line),
+      "--pane", tostring(pane),
+      path,
+    }
+  end
+
   -- vim.system receives argv directly; the path never passes through a shell.
-  vim.system({
-    "open", "-n", "-a", M.app, "--args",
-    "--line", tostring(line),
-    "--pane", tostring(pane),
-    path,
-  }, { text = true }, function(result)
+  vim.system(arguments, { text = true }, function(result)
     if result.code ~= 0 then
       vim.schedule(function()
         vim.notify("QuickMarkview: " .. (result.stderr or "could not launch app"), vim.log.levels.ERROR)

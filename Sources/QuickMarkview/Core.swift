@@ -1,5 +1,65 @@
 import Foundation
 
+public enum DocumentKind: Equatable, Sendable {
+    case markdown
+    case code(language: String)
+
+    public static func detect(url: URL) -> DocumentKind {
+        let markdownExtensions: Set<String> = ["md", "markdown", "mdown", "mkd"]
+        let fileName = url.lastPathComponent
+        let extensionOrName = url.pathExtension.isEmpty ? fileName : url.pathExtension
+        let language = extensionOrName.lowercased()
+        return markdownExtensions.contains(language) ? .markdown : .code(language: language)
+    }
+}
+
+public enum LinkResolver {
+    public static func resolve(href: String, relativeTo fileURL: URL) -> URL? {
+        let pathAndQuery = href.split(separator: "#", maxSplits: 1, omittingEmptySubsequences: false)[0]
+        let path = pathAndQuery.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false)[0]
+        guard !path.isEmpty else { return nil }
+        guard let decoded = String(path).removingPercentEncoding else { return nil }
+
+        let target: URL
+        if let url = URL(string: decoded), let scheme = url.scheme?.lowercased() {
+            guard scheme == "file", let fileURL = URL(string: decoded), fileURL.isFileURL else { return nil }
+            target = fileURL
+        } else if decoded.hasPrefix("/") {
+            target = URL(fileURLWithPath: decoded)
+        } else {
+            target = URL(fileURLWithPath: decoded, relativeTo: fileURL.deletingLastPathComponent())
+        }
+
+        let standardized = target.standardizedFileURL
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: standardized.path, isDirectory: &isDirectory), !isDirectory.boolValue else { return nil }
+        return standardized
+    }
+}
+
+public struct OpenRequest: Equatable, Sendable {
+    public let fileURL: URL
+    public let line: Int?
+    public let paneID: Int?
+
+    public init(fileURL: URL, line: Int? = nil, paneID: Int? = nil) {
+        self.fileURL = fileURL.standardizedFileURL
+        self.line = line.map { max(1, $0) }
+        self.paneID = paneID
+    }
+
+    public static func parse(url: URL) -> OpenRequest? {
+        guard url.scheme?.lowercased() == "quickmarkview", url.host?.lowercased() == "open" else { return nil }
+        guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              let path = components.queryItems?.first(where: { $0.name == "path" })?.value,
+              !path.isEmpty else { return nil }
+        let fileURL = URL(fileURLWithPath: path).standardizedFileURL
+        let line = components.queryItems?.first(where: { $0.name == "line" })?.value.flatMap(Int.init).flatMap { $0 > 0 ? $0 : nil }
+        let paneID = components.queryItems?.first(where: { $0.name == "pane" })?.value.flatMap(Int.init).flatMap { $0 >= 0 ? $0 : nil }
+        return OpenRequest(fileURL: fileURL, line: line, paneID: paneID)
+    }
+}
+
 /// A range in the original Markdown file. Lines are one-based and inclusive.
 public struct SourceRange: Equatable, Sendable {
     public let startLine: Int

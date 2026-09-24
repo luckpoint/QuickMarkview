@@ -26,6 +26,49 @@ private final class PaneBox: @unchecked Sendable {
 final class CoreTests: XCTestCase {
     private let document = MarkdownDocument(url: URL(fileURLWithPath: "/tmp/notes.md"), text: "# One\nalpha\nbeta\n\n## Two\nsecond")
 
+    func testDocumentKindDetectsMarkdownAndSourceLanguages() {
+        XCTAssertEqual(DocumentKind.detect(url: URL(fileURLWithPath: "/tmp/a.md")), .markdown)
+        XCTAssertEqual(DocumentKind.detect(url: URL(fileURLWithPath: "/tmp/a.MD")), .markdown)
+        XCTAssertEqual(DocumentKind.detect(url: URL(fileURLWithPath: "/tmp/a.markdown")), .markdown)
+        XCTAssertEqual(DocumentKind.detect(url: URL(fileURLWithPath: "/tmp/a.mdown")), .markdown)
+        XCTAssertEqual(DocumentKind.detect(url: URL(fileURLWithPath: "/tmp/a.mkd")), .markdown)
+        XCTAssertEqual(DocumentKind.detect(url: URL(fileURLWithPath: "/tmp/a.swift")), .code(language: "swift"))
+        XCTAssertEqual(DocumentKind.detect(url: URL(fileURLWithPath: "/tmp/Makefile")), .code(language: "makefile"))
+        XCTAssertEqual(DocumentKind.detect(url: URL(fileURLWithPath: "/tmp/a.unknownext")), .code(language: "unknownext"))
+    }
+
+    func testLinkResolverFindsLocalFilesAndRejectsInvalidTargets() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("quickmarkview-links-\(UUID().uuidString)")
+        let nested = root.appendingPathComponent("notes")
+        let parent = root.appendingPathComponent("x")
+        try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let current = nested.appendingPathComponent("a.md")
+        let sibling = nested.appendingPathComponent("b.md")
+        let encoded = nested.appendingPathComponent("b c.md")
+        let parentFile = parent.appendingPathComponent("b.md")
+        for file in [current, sibling, encoded, parentFile] { try Data().write(to: file) }
+
+        XCTAssertEqual(LinkResolver.resolve(href: "./b.md", relativeTo: current), sibling.standardizedFileURL)
+        XCTAssertEqual(LinkResolver.resolve(href: "../x/b.md#sec?mode=1", relativeTo: current), parentFile.standardizedFileURL)
+        XCTAssertEqual(LinkResolver.resolve(href: "b%20c.md?view=full#part", relativeTo: current), encoded.standardizedFileURL)
+        XCTAssertEqual(LinkResolver.resolve(href: sibling.path, relativeTo: current), sibling.standardizedFileURL)
+        XCTAssertNil(LinkResolver.resolve(href: "missing.md", relativeTo: current))
+        XCTAssertNil(LinkResolver.resolve(href: ".", relativeTo: current))
+        XCTAssertNil(LinkResolver.resolve(href: "https://example.com/a.md", relativeTo: current))
+    }
+
+    func testOpenRequestParsesQuickMarkviewURLs() {
+        let url = URL(string: "quickmarkview://open?path=%2Ftmp%2F%E6%97%A5%E6%9C%AC%20note.md&line=42&pane=0")!
+        XCTAssertEqual(OpenRequest.parse(url: url), OpenRequest(fileURL: URL(fileURLWithPath: "/tmp/日本 note.md"), line: 42, paneID: 0))
+        XCTAssertEqual(OpenRequest.parse(url: URL(string: "quickmarkview://open?path=%2Ftmp%2Fa.md")!), OpenRequest(fileURL: URL(fileURLWithPath: "/tmp/a.md")))
+        XCTAssertEqual(OpenRequest.parse(url: URL(string: "quickmarkview://open?path=%2Ftmp%2Fa.md&line=0&pane=no")!), OpenRequest(fileURL: URL(fileURLWithPath: "/tmp/a.md")))
+        XCTAssertNil(OpenRequest.parse(url: URL(string: "quickmarkview://open?line=2")!))
+        XCTAssertNil(OpenRequest.parse(url: URL(string: "quickmarkview://other?path=%2Ftmp%2Fa.md")!))
+        XCTAssertNil(OpenRequest.parse(url: URL(string: "https://open?path=%2Ftmp%2Fa.md")!))
+    }
+
     func testPromptMatchesNeovimNormalRequest() {
         let result = PromptBuilder.build(context: document, range: SourceRange(startLine: 2, endLine: 3), request: "Fix this")
         XCTAssertEqual(result, """
@@ -86,6 +129,11 @@ final class CoreTests: XCTestCase {
     func testLaunchOptionsAcceptWezTermPaneZero() throws {
         let options = try LaunchOptions(arguments: ["--line", "3", "--pane", "0", "--target-pane=2", "/tmp/note.md"])
         XCTAssertEqual(options.line, 3); XCTAssertEqual(options.originPaneID, 0); XCTAssertEqual(options.targetPaneID, 2)
+    }
+
+    func testLaunchOptionsAcceptResidentMode() throws {
+        XCTAssertTrue(try LaunchOptions(arguments: ["--resident"]).resident)
+        XCTAssertFalse(try LaunchOptions(arguments: []).resident)
     }
 
     func testWatcherObservesInPlaceAndAtomicSaves() throws {

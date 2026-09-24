@@ -5,6 +5,7 @@ public struct LaunchOptions: Equatable, Sendable {
     public var line: Int?
     public var originPaneID: Int?
     public var targetPaneID: Int?
+    public var resident = false
     public var showHelp = false
 
     public init(arguments: [String] = Array(CommandLine.arguments.dropFirst())) throws {
@@ -13,6 +14,7 @@ public struct LaunchOptions: Equatable, Sendable {
             let argument = arguments[index]
             switch argument {
             case "-h", "--help": showHelp = true
+            case "--resident": resident = true
             case "--line":
                 index += 1; line = try Self.integer(arguments, index, option: "--line")
             case "--pane":
@@ -82,4 +84,5 @@ Usage:
 --line N          Scroll to a one-based source line after rendering.
 --pane ID         Originating Neovim/WezTerm pane. Defaults to WEZTERM_PANE.
 --target-pane ID  Explicit coding-agent pane when the tab has two targets.
+--resident        Keep the app running when the viewer is closed or q is pressed.
 """

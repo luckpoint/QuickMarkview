@@ -10,8 +10,12 @@
   <key>CFBundleVersion</key><string>1</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
   <key>CFBundleDocumentTypes</key><array><dict>
-    <key>CFBundleTypeName</key><string>Markdown document</string>
+    <key>CFBundleTypeName</key><string>Text and source code</string>
     <key>CFBundleTypeRole</key><string>Viewer</string>
-    <key>LSItemContentTypes</key><array><string>net.daringfireball.markdown</string><string>public.text</string></array>
+    <key>LSItemContentTypes</key><array><string>net.daringfireball.markdown</string><string>public.text</string><string>public.source-code</string></array>
+  </dict></array>
+  <key>CFBundleURLTypes</key><array><dict>
+    <key>CFBundleURLName</key><string>QuickMarkview Open Request</string>
+    <key>CFBundleURLSchemes</key><array><string>quickmarkview</string></array>
   </dict></array>
 </dict></plist>

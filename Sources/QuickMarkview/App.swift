@@ -1,4 +1,5 @@
 import AppKit
+import Carbon.HIToolbox
 import UniformTypeIdentifiers
 import WebKit
 
@@ -21,17 +22,23 @@ struct QuickMarkviewMain {
 }
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var window: NSWindow!
     private var controller: ViewerViewController!
     private let options: LaunchOptions
+    private var pendingOpenRequest: OpenRequest?
 
     init(options: LaunchOptions) { self.options = options; super.init() }
+
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        NSAppleEventManager.shared().setEventHandler(self, andSelector: #selector(handleGetURLEvent(_:withReplyEvent:)), forEventClass: AEEventClass(kInternetEventClass), andEventID: AEEventID(kAEGetURL))
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         installMenus()
         controller = ViewerViewController(options: options)
         window = NSWindow(contentViewController: controller)
+        window.delegate = self
         window.title = "QuickMarkview"
         window.setContentSize(NSSize(width: 1200, height: 820))
         window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
@@ -39,12 +46,60 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            if event.modifierFlags.contains(.command), event.charactersIgnoringModifiers?.lowercased() == "q" {
+                NSApp.terminate(nil)
+                return nil
+            }
             guard let window = self?.window, event.window === window,
                   Self.closesViewer(characters: event.characters, firstResponder: window.firstResponder) else { return event }
-            NSApp.terminate(nil)
+            switch Self.quitAction(resident: self?.options.resident ?? false) {
+            case .hide: window.orderOut(nil)
+            case .terminate: NSApp.terminate(nil)
+            }
             return nil
         }
+        if let pendingOpenRequest { self.pendingOpenRequest = nil; receive(pendingOpenRequest) }
     }
+
+    @objc private func handleGetURLEvent(_ event: NSAppleEventDescriptor, withReplyEvent replyEvent: NSAppleEventDescriptor) {
+        guard let value = event.paramDescriptor(forKeyword: keyDirectObject)?.stringValue,
+              let url = URL(string: value), let request = OpenRequest.parse(url: url) else { return }
+        receive(request)
+    }
+
+    private func receive(_ request: OpenRequest) {
+        guard let controller, let window else { pendingOpenRequest = request; return }
+        controller.receive(request)
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    func application(_ application: NSApplication, open urls: [URL]) {
+        guard let url = urls.first else { return }
+        if let request = OpenRequest.parse(url: url) { receive(request) }
+        else if url.isFileURL {
+            if let controller, let window {
+                controller.receive(OpenRequest(fileURL: url))
+                window.makeKeyAndOrderFront(nil)
+                NSApp.activate(ignoringOtherApps: true)
+            }
+        }
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        window.makeKeyAndOrderFront(nil)
+        return true
+    }
+
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        guard options.resident else { return true }
+        sender.orderOut(nil)
+        return false
+    }
+
+    enum QuitAction: Equatable { case hide, terminate }
+
+    static func quitAction(resident: Bool) -> QuitAction { resident ? .hide : .terminate }
 
     static func closesViewer(characters: String?, firstResponder: NSResponder?) -> Bool {
         characters == "q" && !(firstResponder is NSText)
@@ -52,10 +107,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     static func launchFrame(in screen: NSRect) -> NSRect {
         NSRect(x: screen.minX, y: screen.minY, width: (screen.width * 2 / 3).rounded() - 5, height: screen.height)
-    }
-
-    func application(_ application: NSApplication, open urls: [URL]) {
-        if let url = urls.first { controller?.open(url: url, line: nil) }
     }
 
     private func installMenus() { NSApp.mainMenu = Self.mainMenu() }
@@ -102,6 +153,7 @@ final class ViewerViewController: NSViewController, WKNavigationDelegate, WKScri
     private var explicitTargetID: Int?
     private var viewerDirectoryURL: URL?
     private var isSending = false
+    private var alternate: (url: URL, line: Int)?
 
     private let pathLabel = NSTextField(labelWithString: "No file open")
     private let lineLabel = NSTextField(labelWithString: "")
@@ -140,7 +192,7 @@ final class ViewerViewController: NSViewController, WKNavigationDelegate, WKScri
     override func viewDidAppear() {
         super.viewDidAppear()
         if let url = options.fileURL { open(url: url, line: options.line) }
-        else if options.showHelp == false && document == nil { chooseFile(nil) }
+        else if options.showHelp == false && !options.resident && document == nil { chooseFile(nil) }
         view.window?.makeFirstResponder(webView)
         refreshTargets()
     }
@@ -207,7 +259,8 @@ final class ViewerViewController: NSViewController, WKNavigationDelegate, WKScri
         view.window?.makeFirstResponder(webView)
     }
 
-    func open(url: URL, line: Int?) {
+    @discardableResult
+    func open(url: URL, line: Int?) -> Bool {
         let url = url.standardizedFileURL
         do {
             let text = try String(contentsOf: url, encoding: .utf8)
@@ -218,7 +271,17 @@ final class ViewerViewController: NSViewController, WKNavigationDelegate, WKScri
             statusLabel.stringValue = Self.idleStatus
             watcher?.stop(); watcher = FileWatcher(fileURL: url) { [weak self] in DispatchQueue.main.async { self?.reloadAfterExternalChange() } }; watcher?.start()
             queuedSource = text; queuedLine = line; renderCurrentDocument()
-        } catch { statusLabel.stringValue = "Could not open file: \(error.localizedDescription)" }
+            return true
+        } catch { statusLabel.stringValue = "Could not open file: \(error.localizedDescription)"; return false }
+    }
+
+    func receive(_ request: OpenRequest) {
+        originPaneID = request.paneID
+        explicitTargetID = nil
+        alternate = nil
+        hideRequestPanel()
+        _ = open(url: request.fileURL, line: request.line)
+        refreshTargets()
     }
 
     private func reloadAfterExternalChange() {
@@ -239,12 +302,18 @@ final class ViewerViewController: NSViewController, WKNavigationDelegate, WKScri
         // user content into executable JavaScript.
         let sourceLiteral = (try? String(data: JSONEncoder().encode(source), encoding: .utf8)) ?? "\"\""
         let lineLiteral = queuedLine.map(String.init) ?? "null"
-        webView.evaluateJavaScript("window.quickMarkview.setDocument(\(sourceLiteral), \(lineLiteral), \(revision));", completionHandler: nil)
+        let languageLiteral: String
+        if let document, case .code(let language) = DocumentKind.detect(url: document.url) {
+            languageLiteral = (try? String(data: JSONEncoder().encode(language), encoding: .utf8)) ?? "null"
+        } else {
+            languageLiteral = "null"
+        }
+        webView.evaluateJavaScript("window.quickMarkview.setDocument(\(sourceLiteral), \(lineLiteral), \(revision), \(languageLiteral));", completionHandler: nil)
         queuedSource = nil
     }
 
     @objc private func chooseFile(_ sender: Any?) {
-        let panel = NSOpenPanel(); panel.allowedContentTypes = [.text, .plainText, .init(filenameExtension: "md")!, .init(filenameExtension: "markdown")!]; panel.allowsMultipleSelection = false
+        let panel = NSOpenPanel(); panel.allowedContentTypes = [.text, .plainText, .sourceCode, .init(filenameExtension: "md")!, .init(filenameExtension: "markdown")!]; panel.allowsMultipleSelection = false
         if panel.runModal() == .OK, let url = panel.url { open(url: url, line: nil) }
     }
 
@@ -308,6 +377,22 @@ final class ViewerViewController: NSViewController, WKNavigationDelegate, WKScri
         guard let body = message.body as? [String: Any], let type = body["type"] as? String else { return }
         if type == "ready" { webReady = true; renderCurrentDocument(); return }
         if type == "requestInput" { showRequestPanel(); return }
+        if type == "openLink" {
+            guard let href = body["href"] as? String, let document else { return }
+            let fromLine = body["fromLine"] as? Int ?? 1
+            guard let target = LinkResolver.resolve(href: href, relativeTo: document.url) else {
+                statusLabel.stringValue = "Link target not found: \(href)"
+                return
+            }
+            if open(url: target, line: nil) { alternate = (document.url, fromLine) }
+            return
+        }
+        if type == "back" {
+            guard let previous = alternate, let current = document else { return }
+            let fromLine = body["fromLine"] as? Int ?? 1
+            if open(url: previous.url, line: previous.line) { alternate = (current.url, fromLine) }
+            return
+        }
         guard requestPanel.isHidden else { return }
         if type == "selectionCleared" { if let incomingRevision = body["revision"] as? Int, incomingRevision == revision { selection = nil }; return }
         guard type == "selection", let text = body["text"] as? String, let start = body["lineStart"] as? Int, let end = body["lineEnd"] as? Int, let incomingRevision = body["revision"] as? Int, incomingRevision == revision, let document else { return }

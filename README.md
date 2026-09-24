@@ -35,6 +35,7 @@ The command line options are:
 --line N          Scroll to one-based source line N.
 --pane ID         Originating Neovim/WezTerm pane. Defaults to WEZTERM_PANE.
 --target-pane ID  Explicit target when the tab has two coding-agent panes.
+--resident        Keep the app running when the viewer is closed or q is pressed.
 path              Markdown file to open. With no path, the Open button is shown.
 ```
 
@@ -49,9 +50,9 @@ local quickmarkview = require("quickmarkview")
 vim.keymap.set("n", "<leader>am", quickmarkview.open, { desc = "Open Markdown in QuickMarkview" })
 ```
 
-The example passes the current buffer, cursor line, and `WEZTERM_PANE` explicitly. It uses `open -n -a` to launch a fresh app instance and does not interpolate the path into a shell command. Set `quickmarkview.app` to an absolute app path if the bundle is not installed in `/Applications`.
+The example passes the current buffer, cursor line, and `WEZTERM_PANE` explicitly. By default it uses `open -n -a` to launch a fresh app instance. Set `quickmarkview.resident = true` to keep one app process and send each file through the `quickmarkview://` URL scheme. Set `quickmarkview.app` to an absolute app path if the bundle is not installed in `/Applications`.
 
-The window opens over the left two thirds of the screen at full height. Press `q` in the viewer to close it. `q` is typed normally while the request panel has focus. The table-of-contents sidebar starts hidden; press ⌘L (View › Toggle Sidebar) to show or hide it.
+The window opens over the left two thirds of the screen at full height. Press `q` in the viewer to close it. In resident mode, `q` and the close button hide the window; click its Dock icon to show it again. ⌘Q always quits. `q` is typed normally while the request panel has focus. The table-of-contents sidebar starts hidden; press ⌘L (View › Toggle Sidebar) to show or hide it.
 
 ## Selection and sending
 
@@ -65,11 +66,13 @@ gg G        Document start / end.
 v           Toggle visual selection; motions extend it. Esc leaves it.
 V           Toggle linewise visual selection over whole rendered lines.
 <Space>aa   Open the request panel for the current selection.
+<C-]>       Open the local link under the cursor; clicking a local link also follows it.
+<C-^>       Switch to the alternate file (press again to switch back).
 ```
 
 Dragging with the mouse also selects. The viewer reports the nearest Markdown block source range and the selected rendered text. The request panel is a native text view prefilled with the full prompt in the same shape as the existing Neovim integration: source file, line range, an empty `Request:` section where the cursor starts, and the `<selection>` tags. Edit any part of it, then press Shift+Enter to send exactly that text, or Esc to cancel. Start the first line with `/btw` for a side chat request (supported by both Codex and Claude Code). A file reload clears the selection, and a revision check prevents a stale WebKit selection from being sent after a reload.
 
-Links are rendered with HTML disabled. Only `http`, `https`, and `mailto` links explicitly clicked by the user are opened externally; arbitrary WebKit file navigation is rejected. Markdown images are limited to safe URL schemes by markdown-it's renderer policy.
+Links are rendered with HTML disabled. Use `<C-]>` or click a local file link to follow it, then `<C-^>` to switch between the current and previous file. `http`, `https`, and `mailto` links open externally only when clicked or followed from the cursor. Arbitrary WebKit file navigation is rejected. Markdown images are limited to safe URL schemes by markdown-it's renderer policy.
 
 The current viewer does not resolve relative image paths against the opened Markdown file, so document images should be considered unsupported. Remote images are replaced with a local placeholder and never fetched.
 

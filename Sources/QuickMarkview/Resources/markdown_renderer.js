@@ -1,10 +1,40 @@
 (function () {
   "use strict";
-  // markdown-it and Mermaid are bundled beside this file. Both are loaded from
-  // the app bundle, so rendering never waits on a network request.
+  // Rendering libraries are bundled beside this file, so rendering never waits
+  // on a network request.
   const md = window.markdownit({html: false, linkify: true, typographer: true});
   const esc = md.utils.escapeHtml;
   mermaid.initialize({startOnLoad: false, securityLevel: "strict"});
+
+  function highlightedCode(source, language) {
+    const resolved = hljs.getLanguage(language) ? language : "plaintext";
+    return hljs.highlight(source, {language: resolved}).value;
+  }
+
+  function wrapHighlightedLines(html, firstLine) {
+    const parts = html.split(/(<\/?span\b[^>]*>)/g), stack = [];
+    const closeTags = () => stack.map(() => "</span>").reverse().join("");
+    const openTags = () => stack.join("");
+    let line = firstLine, output = `<span class="line" data-source-start="${line}" data-source-end="${line}">`;
+    for (const part of parts) {
+      if (part.startsWith("<span")) {
+        stack.push(part);
+        output += part;
+      } else if (part === "</span>") {
+        if (stack.length) stack.pop();
+        output += part;
+      } else {
+        const chunks = part.split("\n");
+        output += chunks[0];
+        for (let index = 1; index < chunks.length; index++) {
+          output += closeTags() + "</span>\n";
+          line++;
+          output += `<span class="line" data-source-start="${line}" data-source-end="${line}">` + openTags() + chunks[index];
+        }
+      }
+    }
+    return output + closeTags() + "</span>";
+  }
 
   function sourceAttrs(token) {
     if (!token.map) return;
@@ -41,6 +71,9 @@
     const start = token.map ? token.map[0] + 1 : 1, end = token.map ? Math.max(start, token.map[1]) : start;
     if (language === "mermaid") {
       return `<div class="mermaid" data-source-start="${start}" data-source-end="${end}" data-mermaid-source="${encodeURIComponent(token.content)}"></div>`;
+    }
+    if (language && hljs.getLanguage(language)) {
+      return `<pre data-source-start="${start}" data-source-end="${end}"><code class="hljs language-${esc(language)}">${hljs.highlight(token.content, {language}).value}</code></pre>\n`;
     }
     const klass = language ? ` class="language-${esc(language)}"` : "";
     return `<pre data-source-start="${start}" data-source-end="${end}"><code${klass}>${esc(token.content)}</code></pre>\n`;
@@ -82,7 +115,8 @@
   // The DOM selection is the Vim cursor; #cursor only draws its focus end.
   // In V mode the selection spans whole rendered lines, so the cursor is kept apart.
   let mode = "", pending = "", saved = null, cursor = null, lineAnchor = null;
-  const ESC = "\x1b", controls = {f: "\x06", b: "\x02"};
+  const ESC = "\x1b", controlFollow = "\x1d", controlBack = "\x1e";
+  const controls = {f: "\x06", b: "\x02", "]": controlFollow, "}": controlFollow, "^": controlBack, "6": controlBack};
 
   function caret() {
     const selection = window.getSelection();
@@ -119,6 +153,28 @@
   function placeCaret(element) {
     const text = element && document.createTreeWalker(element, NodeFilter.SHOW_TEXT).nextNode();
     if (text) window.getSelection().collapse(text, 0);
+  }
+
+  function linkAtCaret() {
+    const [node] = caret();
+    let element = node && (node.nodeType === 3 ? node.parentElement : node);
+    return element && element.closest ? element.closest("a[href]") : null;
+  }
+
+  function followLink(anchor) {
+    const href = anchor.getAttribute("href") || "";
+    if (/^(https?:|mailto:)/i.test(href) || href.startsWith("//")) return false;
+    if (href.startsWith("#")) return false;
+    const block = anchor.closest("[data-source-start]");
+    post({type: "openLink", href, fromLine: Number(block && block.dataset.sourceStart) || 1});
+    return true;
+  }
+
+  function visibleLine() {
+    const visible = Array.from(document.querySelectorAll("[data-source-start]"))
+      .filter(node => node.getBoundingClientRect().bottom >= 0)
+      .sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top)[0];
+    return Number(visible && visible.dataset.sourceStart) || 1;
   }
 
   // Expands the collapsed selection to the rendered line it sits on.
@@ -194,6 +250,8 @@
     G: () => motion("forward", "documentboundary"),
     [controls.f]: () => halfPage(1),
     [controls.b]: () => halfPage(-1),
+    [controlFollow]: () => { const anchor = linkAtCaret(); if (anchor && !followLink(anchor)) anchor.click(); },
+    [controlBack]: () => post({type: "back", fromLine: visibleLine()}),
     v: () => { if (mode === "v") leaveVisual(); else mode = "v"; },
     V: () => { if (mode === "V") leaveVisual(); else enterLineVisual(); },
     [ESC]: leaveVisual,
@@ -211,6 +269,10 @@
     event.preventDefault();
     if (bindings[keys]) bindings[keys](); else pending = keys;
   });
+  document.addEventListener("click", event => {
+    const anchor = event.target instanceof Element ? event.target.closest("a[href]") : null;
+    if (anchor && followLink(anchor)) event.preventDefault();
+  });
   document.addEventListener("mousedown", () => { mode = ""; });
   window.addEventListener("focus", restoreSelection);
 
@@ -218,23 +280,32 @@
     currentLine: null,
     currentRevision: 0,
     renderVersion: 0,
-    setDocument: function (source, line, revision) {
+    setDocument: function (source, line, revision, language) {
       const oldScroll = window.scrollY;
       const version = ++this.renderVersion;
       const env = {};
-      const tokens = md.parse(String(source || ""), env);
-      document.getElementById("content").innerHTML = md.renderer.render(tokens, md.options, env);
-      document.getElementById("toc").innerHTML = tokens.filter(t => t.type === "heading_open").map((open, n) => {
+      const text = String(source || "");
+      const tokens = language === null || language === undefined ? md.parse(text, env) : null;
+      const content = document.getElementById("content");
+      const toc = document.getElementById("toc");
+      if (language !== null && language !== undefined) {
+        const html = highlightedCode(text, language);
+        content.innerHTML = `<pre><code class="hljs language-${esc(hljs.getLanguage(language) ? language : "plaintext")}">${wrapHighlightedLines(html, 1)}</code></pre>`;
+        toc.innerHTML = "";
+      } else {
+        content.innerHTML = md.renderer.render(tokens, md.options, env);
+      }
+      toc.innerHTML = tokens ? tokens.filter(t => t.type === "heading_open").map((open, n) => {
         const inlineToken = tokens[tokens.indexOf(open) + 1], label = inlineToken ? inlineToken.content : "";
         const id = `heading-${open.map ? open.map[0] + 1 : n + 1}`;
         open.attrSet("id", id);
         // The content is already escaped by markdown-it, and this is only a
         // compact navigation label, not a second HTML rendering pass.
         return `<a class="toc-${open.tag.slice(1)}" href="#${id}">${esc(label)}</a>`;
-      }).join("");
+      }).join("") : "";
       // Set heading IDs after rendering because the table of contents above
       // intentionally does not mutate the already rendered token stream.
-      tokens.forEach((token, index) => { if (token.type === "heading_open") { const id = `heading-${token.map ? token.map[0] + 1 : index + 1}`; const heading = document.querySelector(`h${token.tag.slice(1)}[data-source-start="${token.map[0] + 1}"]`); if (heading) heading.id = id; } });
+      if (tokens) tokens.forEach((token, index) => { if (token.type === "heading_open") { const id = `heading-${token.map ? token.map[0] + 1 : index + 1}`; const heading = document.querySelector(`h${token.tag.slice(1)}[data-source-start="${token.map[0] + 1}"]`); if (heading) heading.id = id; } });
       const diagrams = Array.from(document.querySelectorAll(".mermaid"));
       const renders = diagrams.map(container => renderMermaid(container, version));
       this.currentLine = line || null; this.currentRevision = Number(revision || 0);
