@@ -50,9 +50,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 NSApp.terminate(nil)
                 return nil
             }
-            guard let window = self?.window, event.window === window,
-                  Self.closesViewer(characters: event.characters, firstResponder: window.firstResponder) else { return event }
-            switch Self.quitAction(resident: self?.options.resident ?? false) {
+            guard let self, let window = self.window, event.window === window else { return event }
+            if self.controller?.isTextEditActive == true { return event }
+            guard Self.closesViewer(characters: event.characters, firstResponder: window.firstResponder) else { return event }
+            switch Self.quitAction(resident: self.options.resident) {
             case .hide: window.orderOut(nil)
             case .terminate: NSApp.terminate(nil)
             }
@@ -139,6 +140,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 }
 
+private enum TextEditError: Error {
+    case conflict
+}
+
 @MainActor
 final class ViewerViewController: NSViewController, WKNavigationDelegate, WKScriptMessageHandler, NSTextViewDelegate {
     private let options: LaunchOptions
@@ -157,6 +162,11 @@ final class ViewerViewController: NSViewController, WKNavigationDelegate, WKScri
     private var isSending = false
     private var alternate: (url: URL, line: Int)?
     private var finderGeneration = 0
+    private var isEditingText = false
+    private var isSavingTextEdit = false
+    private var pendingFileChange = false
+    private let fileEditQueue = DispatchQueue(label: "quickmarkview.fileedit", qos: .utility)
+    var isTextEditActive: Bool { isEditingText }
 
     private let pathLabel = NSTextField(labelWithString: "No file open")
     private let lineLabel = NSTextField(labelWithString: "")
@@ -272,6 +282,8 @@ final class ViewerViewController: NSViewController, WKNavigationDelegate, WKScri
         let url = url.standardizedFileURL
         do {
             let text = try String(contentsOf: url, encoding: .utf8)
+            webView.evaluateJavaScript("window.quickMarkview.cancelEdit();", completionHandler: nil)
+            isEditingText = false
             revision &+= 1
             document = MarkdownDocument(url: url, text: text, revision: revision)
             selection = nil
@@ -293,15 +305,99 @@ final class ViewerViewController: NSViewController, WKNavigationDelegate, WKScri
     }
 
     private func reloadAfterExternalChange() {
+        if isSavingTextEdit { pendingFileChange = true; return }
         guard let url = document?.url else { return }
         do {
             let text = try String(contentsOf: url, encoding: .utf8)
             guard text != document?.text else { return }
+            if isEditingText {
+                isEditingText = false
+                webView.evaluateJavaScript("window.quickMarkview.cancelEdit();", completionHandler: nil)
+            }
             revision &+= 1; document = MarkdownDocument(url: url, text: text, revision: revision)
             selection = nil
-            statusLabel.stringValue = "Selection cleared after file reload. Select text again."
+            statusLabel.stringValue = "External change loaded; the current edit was cancelled."
             queuedSource = text; queuedLine = nil; renderCurrentDocument()
         } catch { statusLabel.stringValue = "File changed but could not be read: \(error.localizedDescription)" }
+    }
+
+    private func handleTextEdit(_ body: [String: Any]) {
+        guard let document,
+              let incomingRevision = body["revision"] as? Int,
+              incomingRevision == Int(revision),
+              let start = body["start"] as? Int,
+              let end = body["end"] as? Int,
+              let oldText = body["oldText"] as? String,
+              let newText = body["newText"] as? String else {
+            completeTextEdit(success: false, error: "Document changed. Reopen the editor and try again.")
+            return
+        }
+        let originalText = document.text
+        let source = originalText as NSString
+        guard start >= 0, end >= start, end <= source.length,
+              source.substring(with: NSRange(location: start, length: end - start)) == oldText else {
+            completeTextEdit(success: false, error: "The source text no longer matches.")
+            return
+        }
+        let updatedText = source.replacingCharacters(in: NSRange(location: start, length: end - start), with: newText)
+        let url = document.url
+        let editRevision = document.revision
+        isSavingTextEdit = true
+        statusLabel.stringValue = "Saving edit…"
+        fileEditQueue.async { [weak self] in
+            let result: Result<Void, Error>
+            do {
+                let fileManager = FileManager.default
+                let temporaryURL = url.deletingLastPathComponent()
+                    .appendingPathComponent(".\(url.lastPathComponent).quickmarkview-\(UUID().uuidString)")
+                defer { try? fileManager.removeItem(at: temporaryURL) }
+                try Data(updatedText.utf8).write(to: temporaryURL, options: .atomic)
+                let diskText = try String(contentsOf: url, encoding: .utf8)
+                guard diskText == originalText else { throw TextEditError.conflict }
+                _ = try fileManager.replaceItemAt(url, withItemAt: temporaryURL, backupItemName: nil, options: [.usingNewMetadataOnly])
+                result = .success(())
+            } catch {
+                result = .failure(error)
+            }
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.isSavingTextEdit = false
+                guard self.document?.revision == editRevision else {
+                    if self.pendingFileChange {
+                        self.pendingFileChange = false
+                        self.reloadAfterExternalChange()
+                    }
+                    return
+                }
+                if case .success = result, self.document?.revision == editRevision {
+                    self.revision &+= 1
+                    self.document = MarkdownDocument(url: url, text: updatedText, revision: self.revision)
+                    self.selection = nil
+                    self.isEditingText = false
+                    self.statusLabel.stringValue = Self.idleStatus
+                    self.completeTextEdit(success: true, error: nil)
+                } else {
+                    let message: String
+                    if case .failure(let error) = result {
+                        message = error is TextEditError ? "File changed externally; edit was not saved." : "Could not save edit: \(error.localizedDescription)"
+                    } else {
+                        message = "Document changed before the edit finished saving."
+                    }
+                    self.completeTextEdit(success: false, error: message)
+                    if self.pendingFileChange || message.hasPrefix("File changed externally") { self.reloadAfterExternalChange() }
+                }
+                if self.pendingFileChange {
+                    self.pendingFileChange = false
+                    self.reloadAfterExternalChange()
+                }
+            }
+        }
+    }
+
+    private func completeTextEdit(success: Bool, error: String?) {
+        if !success, let error { statusLabel.stringValue = error }
+        let errorLiteral = error.flatMap { try? String(data: JSONEncoder().encode($0), encoding: .utf8) } ?? "null"
+        webView.evaluateJavaScript("window.quickMarkview.finishEdit(\(success), \(revision), \(errorLiteral));", completionHandler: nil)
     }
 
     private func renderCurrentDocument() {
@@ -450,6 +546,19 @@ final class ViewerViewController: NSViewController, WKNavigationDelegate, WKScri
             return
         }
         if type == "requestInput" { showRequestPanel(); return }
+        if type == "editStarted" {
+            guard let incomingRevision = body["revision"] as? Int, incomingRevision == Int(revision) else { return }
+            isEditingText = true
+            statusLabel.stringValue = "Editing · Enter save · Esc cancel"
+            return
+        }
+        if type == "editFinished" {
+            isEditingText = false
+            if statusLabel.stringValue.hasPrefix("Editing") { statusLabel.stringValue = Self.idleStatus }
+            return
+        }
+        if type == "editUnavailable" { statusLabel.stringValue = "This text cannot be edited yet."; return }
+        if type == "editText" { handleTextEdit(body); return }
         if type == "openLink" {
             guard let href = body["href"] as? String, let document else { return }
             let fromLine = body["fromLine"] as? Int ?? 1

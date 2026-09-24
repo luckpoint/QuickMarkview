@@ -126,7 +126,8 @@
   // The DOM selection is the Vim cursor; #cursor only draws its focus end.
   // In V mode the selection spans whole rendered lines, so the cursor is kept apart.
   let mode = "", pending = "", saved = null, cursor = null, lineAnchor = null;
-  const ESC = "\x1b", controlFollow = "\x1d", controlBack = "\x1e";
+  let currentSource = "", editState = null;
+  const ESC = "\x1b", TAB = "\t", controlFollow = "\x1d", controlBack = "\x1e";
   const controls = {f: "\x06", b: "\x02", "]": controlFollow, "}": controlFollow, "^": controlBack, "6": controlBack};
 
   function caret() {
@@ -148,7 +149,9 @@
     const range = document.createRange();
     range.setStart(node, offset);
     if (node.nodeType === 3 && offset < node.length) range.setEnd(node, offset + 1);
-    return range.getClientRects()[0] || null;
+    const rect = range.getClientRects()[0];
+    if (rect) return rect;
+    return node.nodeType === 1 ? node.getBoundingClientRect() : null;
   }
 
   const cursorRect = () => rectAt(mode === "V" ? cursor : caret());
@@ -170,6 +173,238 @@
     const [node] = caret();
     let element = node && (node.nodeType === 3 ? node.parentElement : node);
     return element && element.closest ? element.closest("a[href]") : null;
+  }
+
+  function cellAtCursor() {
+    const [node] = mode === "V" ? cursor : caret();
+    const element = node && (node.nodeType === 3 ? node.parentElement : node);
+    return element && element.closest ? element.closest("th, td") : null;
+  }
+
+  function moveToCell(cell) {
+    if (!cell) return;
+    const target = document.createTreeWalker(cell, NodeFilter.SHOW_TEXT).nextNode() || cell;
+    move((selection, alter) => alter === "extend" ? selection.extend(target, 0) : selection.collapse(target, 0));
+    cell.scrollIntoView({block: "nearest", inline: "nearest"});
+  }
+
+  function rowStep(step) {
+    const cell = cellAtCursor();
+    if (!cell) return;
+    const table = cell.closest("table"), row = table.rows[cell.parentElement.rowIndex + step];
+    if (row && row.cells.length) moveToCell(row.cells[Math.min(cell.cellIndex, row.cells.length - 1)]);
+  }
+
+  function nextCell() {
+    const cell = cellAtCursor();
+    if (!cell) return;
+    const row = cell.parentElement, rows = row.closest("table").rows;
+    const nextRow = rows[row.rowIndex + 1];
+    moveToCell(row.cells[cell.cellIndex + 1] || (nextRow && nextRow.cells[0]));
+  }
+
+  function sourceLineBounds(lineNumber) {
+    if (!Number.isInteger(lineNumber) || lineNumber < 1) return null;
+    let start = 0;
+    for (let line = 1; line < lineNumber; line++) {
+      const newline = currentSource.indexOf("\n", start);
+      if (newline < 0) return null;
+      start = newline + 1;
+    }
+    let end = currentSource.indexOf("\n", start);
+    if (end < 0) end = currentSource.length;
+    if (end > start && currentSource[end - 1] === "\r") end--;
+    return {start, end, text: currentSource.slice(start, end)};
+  }
+
+  function sourceLinesBounds(firstLine, lastLine) {
+    if (!Number.isInteger(firstLine) || !Number.isInteger(lastLine) || firstLine < 1 || lastLine < firstLine) return null;
+    const first = sourceLineBounds(firstLine), last = sourceLineBounds(lastLine);
+    if (!first || !last) return null;
+    return {start: first.start, end: last.end, text: currentSource.slice(first.start, last.end)};
+  }
+
+  function splitTableCells(line) {
+    const pipes = [];
+    let ticks = 0;
+    for (let index = 0; index < line.length; index++) {
+      if (line[index] === "`") {
+        let end = index + 1;
+        while (line[end] === "`") end++;
+        const count = end - index;
+        ticks = ticks === count ? 0 : (ticks === 0 ? count : ticks);
+        index = end - 1;
+      } else if (line[index] === "|" && ticks === 0) {
+        let slashes = 0;
+        for (let before = index - 1; before >= 0 && line[before] === "\\"; before--) slashes++;
+        if (slashes % 2 === 0) pipes.push(index);
+      }
+    }
+    const leading = line.slice(0, pipes[0] ?? line.length).trim() === "" && pipes[0] === line.search(/\S/) ? 1 : 0;
+    const trailing = pipes.length && line.slice(pipes[pipes.length - 1] + 1).trim() === "" && line.trimEnd().endsWith("|") ? 1 : 0;
+    const separators = pipes.slice(leading, pipes.length - trailing);
+    const cells = [];
+    let start = leading ? pipes[0] + 1 : 0;
+    for (const separator of separators) {
+      cells.push({start, end: separator});
+      start = separator + 1;
+    }
+    cells.push({start, end: trailing ? pipes[pipes.length - 1] : line.length});
+    return cells.map(cell => {
+      let left = cell.start, right = cell.end;
+      while (left < right && /\s/.test(line[left])) left++;
+      while (right > left && /\s/.test(line[right - 1])) right--;
+      return {start: left, end: right, text: line.slice(left, right)};
+    });
+  }
+
+  function editableRange() {
+    const cell = cellAtCursor();
+    if (cell) {
+      if (cell.childElementCount) return null;
+      const row = cell.closest("tr"), bounds = sourceLineBounds(Number(row && row.dataset.sourceStart));
+      if (!bounds) return null;
+      const part = splitTableCells(bounds.text)[cell.cellIndex];
+      if (!part || cell.textContent !== part.text) return null;
+      return {start: bounds.start + part.start, end: bounds.start + part.end, text: part.text, node: cell, kind: "cell"};
+    }
+
+    const [node] = mode === "V" ? cursor : caret();
+    let element = node && (node.nodeType === 3 ? node.parentElement : node);
+    const block = element && element.closest ? element.closest("p, h1, h2, h3, h4, h5, h6") : null;
+    if (!block) return null;
+    const bounds = sourceLinesBounds(Number(block.dataset.sourceStart), Number(block.dataset.sourceEnd));
+    if (!bounds) return null;
+
+    const heading = /^(\s{0,3}#{1,6}\s+)(.*?)(\s+#+\s*)?$/.exec(bounds.text);
+    if (/^H[1-6]$/.test(block.tagName) && heading) {
+      const start = heading[1].length;
+      return {start: bounds.start + start, end: bounds.start + start + heading[2].length, text: heading[2], node: block, kind: "heading"};
+    }
+
+    if (block.tagName === "P") {
+      const listItem = block.closest("li");
+      if (listItem) {
+        const marker = /^(\s*(?:[-+*]|\d+[.)])\s+)(.*)$/.exec(bounds.text);
+        if (!marker || listItem.querySelector("p") !== block) return null;
+        return {start: bounds.start + marker[1].length, end: bounds.end, text: marker[2], node: block, kind: "list"};
+      }
+      if (block.closest("blockquote")) return null;
+      return {start: bounds.start, end: bounds.end, text: bounds.text, node: block, kind: "paragraph"};
+    }
+    return null;
+  }
+
+  function lineCount(text) {
+    return text.split(/\r\n|\r|\n/).length;
+  }
+
+  function shiftSourceLines(afterLine, delta) {
+    if (!delta) return;
+    document.querySelectorAll("[data-source-start]").forEach(node => {
+      const start = Number(node.dataset.sourceStart), end = Number(node.dataset.sourceEnd);
+      if (start > afterLine) node.dataset.sourceStart = String(start + delta);
+      if (end >= afterLine) node.dataset.sourceEnd = String(end + delta);
+    });
+  }
+
+  function renderBlock(sourceText, firstLine) {
+    const tokens = md.parse(sourceText, {});
+    tokens.forEach(token => { if (token.map) token.map = token.map.map(line => line + firstLine - 1); });
+    const template = document.createElement("template");
+    template.innerHTML = md.renderer.render(tokens, md.options, {});
+    return {nodes: Array.from(template.content.children), sources: imageSources(tokens)};
+  }
+
+  function closeEditor(cancelled) {
+    if (!editState) return;
+    const {origin, node} = editState;
+    document.getElementById("quickmarkview-editor")?.remove();
+    editState = null;
+    post({type: "editFinished", cancelled: Boolean(cancelled), revision: window.quickMarkview.currentRevision});
+    mode = "";
+    if (cancelled) {
+      if (origin[0] && origin[0].isConnected) window.getSelection().collapse(...origin);
+      else placeCaret(node);
+    }
+    drawCursor();
+  }
+
+  function beginEdit() {
+    if (editState) return;
+    const range = editableRange();
+    if (!range) { post({type: "editUnavailable", revision: window.quickMarkview.currentRevision}); return; }
+    const origin = mode === "V" ? cursor : caret();
+    mode = ""; pending = "";
+    const rect = range.node.getBoundingClientRect();
+    const editor = document.createElement("div");
+    editor.id = "quickmarkview-editor";
+    editor.className = "quickmarkview-editor";
+    editor.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - 420))}px`;
+    editor.style.top = `${Math.max(8, Math.min(rect.top, window.innerHeight - 100))}px`;
+    editor.innerHTML = '<textarea aria-label="Edit Markdown text" rows="1"></textarea><div class="quickmarkview-editor-hint"></div>';
+    document.body.appendChild(editor);
+    const input = editor.querySelector("textarea");
+    input.value = range.text;
+    editState = {...range, origin, editor, input, revision: window.quickMarkview.currentRevision};
+    post({type: "editStarted", revision: editState.revision});
+    const multiline = range.kind === "paragraph";
+    editor.querySelector(".quickmarkview-editor-hint").textContent = multiline ? "Enter save · Shift+Enter newline · Esc cancel" : "Enter save · Esc cancel";
+    input.focus(); input.select();
+    const resizeInput = () => {
+      input.style.height = "auto";
+      input.style.height = `${Math.min(input.scrollHeight, 160)}px`;
+    };
+    input.addEventListener("input", resizeInput);
+    resizeInput();
+    input.addEventListener("keydown", event => {
+      event.stopPropagation();
+      if (event.key === "Escape") { event.preventDefault(); closeEditor(true); }
+      else if (event.key === "Enter" && event.shiftKey) { if (!multiline) event.preventDefault(); }
+      else if (event.key === "Enter") {
+        event.preventDefault();
+        if (!multiline && input.value.includes("\n")) return;
+        const lineEnding = editState.text.includes("\r\n") ? "\r\n" : "\n";
+        const sourceText = input.value.replace(/\n/g, lineEnding);
+        editState.sourceText = sourceText;
+        input.disabled = true;
+        editor.querySelector(".quickmarkview-editor-hint").textContent = "Saving…";
+        post({type: "editText", revision: editState.revision, start: editState.start, end: editState.end,
+          oldText: editState.text, newText: sourceText});
+      }
+    });
+  }
+
+  function finishEdit(success, revision, error) {
+    if (!editState) return;
+    if (!success) {
+      editState.input.disabled = false;
+      editState.editor.querySelector(".quickmarkview-editor-hint").textContent = error || "Could not save · Esc cancel";
+      return;
+    }
+    const edit = editState;
+    currentSource = currentSource.slice(0, edit.start) + edit.sourceText + currentSource.slice(edit.end);
+    let caretNode = edit.node, images = [];
+    if (edit.kind === "paragraph") {
+      const firstLine = Number(edit.node.dataset.sourceStart);
+      shiftSourceLines(Number(edit.node.dataset.sourceEnd), lineCount(edit.sourceText) - lineCount(edit.text));
+      const rendered = renderBlock(edit.sourceText, firstLine);
+      edit.node.replaceWith(...rendered.nodes);
+      caretNode = rendered.nodes[0];
+      images = rendered.sources;
+    } else {
+      edit.node.innerHTML = md.renderInline(edit.sourceText);
+      images = imageSources(md.parseInline(edit.sourceText, {}));
+    }
+    if (edit.kind === "heading" && edit.node.id) {
+      const tocLink = document.querySelector(`#toc a[href="#${CSS.escape(edit.node.id)}"]`);
+      if (tocLink) tocLink.textContent = edit.node.textContent;
+    }
+    window.quickMarkview.currentRevision = Number(revision);
+    if (images.length) post({type: "resolveImages", sources: images, revision: window.quickMarkview.currentRevision});
+    closeEditor(false);
+    placeCaret(caretNode);
+    post({type: "selectionCleared", revision: window.quickMarkview.currentRevision});
   }
 
   function followLink(anchor) {
@@ -255,6 +490,9 @@
     j: () => motion("forward", "line"),
     k: () => motion("backward", "line"),
     l: () => motion("forward", "character"),
+    J: () => rowStep(1),
+    K: () => rowStep(-1),
+    [TAB]: nextCell,
     "0": () => motion("backward", "lineboundary"),
     $: () => motion("forward", "lineboundary"),
     gg: () => motion("backward", "documentboundary"),
@@ -263,6 +501,7 @@
     [controls.b]: () => halfPage(-1),
     [controlFollow]: () => { const anchor = linkAtCaret(); if (anchor && !followLink(anchor)) anchor.click(); },
     [controlBack]: () => post({type: "back", fromLine: visibleLine()}),
+    e: beginEdit,
     v: () => { if (mode === "v") leaveVisual(); else mode = "v"; },
     V: () => { if (mode === "V") leaveVisual(); else enterLineVisual(); },
     [ESC]: leaveVisual,
@@ -272,7 +511,7 @@
 
   document.addEventListener("keydown", event => {
     if (event.metaKey || event.altKey || event.isComposing) return;
-    const key = event.key === "Escape" ? ESC : event.ctrlKey ? controls[event.key] : event.key;
+    const key = event.key === "Tab" && !event.shiftKey ? TAB : event.key === "Escape" ? ESC : event.ctrlKey ? controls[event.key] : event.key;
     if (!key || key.length !== 1) return;
     const keys = isPrefix(pending + key) ? pending + key : key;
     pending = "";
@@ -307,10 +546,12 @@
       });
     },
     setDocument: function (source, line, revision, language) {
+      if (editState) closeEditor(true);
       const oldScroll = window.scrollY;
       const version = ++this.renderVersion;
       const env = {};
       const text = String(source || "");
+      currentSource = text;
       const tokens = language === null || language === undefined ? md.parse(text, env) : null;
       const content = document.getElementById("content");
       const toc = document.getElementById("toc");
@@ -366,7 +607,9 @@
       drawCursor();
     },
     visibleLine: visibleLine,
-    selectedText: sendSelection
+    selectedText: sendSelection,
+    finishEdit: finishEdit,
+    cancelEdit: function () { if (editState) closeEditor(true); }
   };
   document.addEventListener("selectionchange", () => { rememberSelection(); sendSelection(); drawCursor(); });
 })();

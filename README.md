@@ -16,7 +16,7 @@ Demo: Split WezTerm window with Neovim on the left and Claude Code on the right.
 3. Inter-pane Transfer: The prompt is sent directly into the Claude Code pane via WezTerm CLI.
 4. Agent Execution: Claude Code receives the context, begins reasoning, and runs shell commands to analyze the codebase and explain the snippet.
 
-## Build and run
+## Build and Run
 
 The target requires macOS 13 or newer and Xcode 26's Swift toolchain.
 
@@ -60,6 +60,9 @@ The viewer has a Vim-style cursor:
 
 ```text
 h j k l     Move by character / line.
+e           Edit the Markdown source of the paragraph, heading, list item, or table cell under the cursor; Enter saves, Shift+Enter adds a line (paragraphs), Esc cancels.
+J K         Move to the same column in the next / previous table row.
+<Tab>       Move to the next table cell.
 0 $         Line start / end.
 gg G        Document start / end.
 <C-f> <C-b> Scroll half a page down / up; the cursor moves with it.

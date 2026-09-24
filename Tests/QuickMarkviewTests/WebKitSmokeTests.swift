@@ -125,6 +125,80 @@ final class WebKitSmokeTests: XCTestCase, WKNavigationDelegate, WKScriptMessageH
         wait(for: [checked], timeout: 3)
     }
 
+    func testEditParagraphWithInlineMarkupAcrossLines() {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Sources/QuickMarkview/Resources")
+        let configuration = WKWebViewConfiguration()
+        configuration.userContentController.add(self, name: "quickMarkview")
+        let view = WKWebView(frame: NSRect(x: 0, y: 0, width: 800, height: 600), configuration: configuration)
+        view.navigationDelegate = self
+        loaded = expectation(description: "viewer loads for editing")
+        smokeRenderAfterLoad = false
+        view.loadFileURL(root.appendingPathComponent("viewer.html"), allowingReadAccessTo: root)
+        wait(for: [loaded!], timeout: 5)
+        view.evaluateJavaScript("window.quickMarkview.setDocument('a **b**\\nc\\n\\nnext', null, 1);")
+        let edited = expectation(description: "paragraph source is edited")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            let script = """
+            window.getSelection().collapse(document.querySelector('strong').firstChild, 0);
+            document.dispatchEvent(new KeyboardEvent('keydown', {key: 'e'}));
+            const input = document.querySelector('#quickmarkview-editor textarea'), original = input.value;
+            input.value = 'x **y**\\nz\\n\\nw';
+            input.dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter'}));
+            window.quickMarkview.finishEdit(true, 2, null);
+            const paragraphs = [...document.querySelectorAll('#content p')];
+            JSON.stringify({original, strong: document.querySelector('strong').textContent, count: paragraphs.length, lines: paragraphs.map(p => p.dataset.sourceStart + '-' + p.dataset.sourceEnd)})
+            """
+            view.evaluateJavaScript(script) { value, error in
+                XCTAssertNil(error)
+                let result = try? JSONSerialization.jsonObject(with: Data((value as? String ?? "{}").utf8)) as? [String: Any]
+                XCTAssertEqual(result?["original"] as? String, "a **b**\nc")
+                XCTAssertEqual(result?["strong"] as? String, "y")
+                XCTAssertEqual(result?["count"] as? Int, 3)
+                XCTAssertEqual(result?["lines"] as? [String], ["1-2", "4-4", "6-6"])
+                edited.fulfill()
+            }
+        }
+        wait(for: [edited], timeout: 5)
+    }
+
+    func testCancelEditRestoresCaret() {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Sources/QuickMarkview/Resources")
+        let configuration = WKWebViewConfiguration()
+        configuration.userContentController.add(self, name: "quickMarkview")
+        let view = WKWebView(frame: NSRect(x: 0, y: 0, width: 800, height: 600), configuration: configuration)
+        view.navigationDelegate = self
+        loaded = expectation(description: "viewer loads for edit cancel")
+        smokeRenderAfterLoad = false
+        view.loadFileURL(root.appendingPathComponent("viewer.html"), allowingReadAccessTo: root)
+        wait(for: [loaded!], timeout: 5)
+        view.evaluateJavaScript("window.quickMarkview.setDocument('a **bold** c', null, 1);")
+        let cancelled = expectation(description: "caret returns after cancel")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            let script = """
+            const text = document.querySelector('strong').firstChild;
+            window.getSelection().collapse(text, 2);
+            document.dispatchEvent(new KeyboardEvent('keydown', {key: 'e'}));
+            document.querySelector('#quickmarkview-editor textarea').dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape'}));
+            const selection = window.getSelection();
+            JSON.stringify({editor: !!document.getElementById('quickmarkview-editor'), collapsed: selection.isCollapsed, same: selection.focusNode === text, offset: selection.focusOffset})
+            """
+            view.evaluateJavaScript(script) { value, error in
+                XCTAssertNil(error)
+                let result = try? JSONSerialization.jsonObject(with: Data((value as? String ?? "{}").utf8)) as? [String: Any]
+                XCTAssertEqual(result?["editor"] as? Bool, false)
+                XCTAssertEqual(result?["collapsed"] as? Bool, true)
+                XCTAssertEqual(result?["same"] as? Bool, true)
+                XCTAssertEqual(result?["offset"] as? Int, 2)
+                cancelled.fulfill()
+            }
+        }
+        wait(for: [cancelled], timeout: 5)
+    }
+
     private func descendants(of view: NSView) -> [NSView] {
         view.subviews + view.subviews.flatMap(descendants)
     }
