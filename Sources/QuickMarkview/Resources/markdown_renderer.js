@@ -156,12 +156,14 @@
 
   const cursorRect = () => rectAt(mode === "V" ? cursor : caret());
 
-  function drawCursor() {
+  function drawCursor(scroll = false) {
     const mark = document.getElementById("cursor"), rect = cursorRect();
     mark.hidden = !rect;
     if (!rect) return;
     Object.assign(mark.style, {left: `${rect.left + scrollX}px`, top: `${rect.top + scrollY}px`, width: `${Math.max(rect.width, 8)}px`, height: `${rect.height}px`});
-    mark.scrollIntoView({block: "nearest"});
+    // Native mouse selection owns scrolling. In SVG, WebKit's Range rectangle
+    // can point at a different label, so selectionchange must not scroll to it.
+    if (scroll) mark.scrollIntoView({block: "nearest"});
   }
 
   function placeCaret(element) {
@@ -470,6 +472,7 @@
     if (mode === "V") selection.collapse(...cursor);
     step(selection, mode === "v" ? "extend" : "move");
     if (mode === "V") selectLines();
+    drawCursor(true);
   }
 
   const motion = (direction, granularity) => move((selection, alter) => selection.modify(alter, direction, granularity));

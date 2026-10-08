@@ -1,6 +1,7 @@
 #if canImport(WebKit)
 import XCTest
 import WebKit
+import AppKit
 
 @MainActor
 final class VimKeyTests: XCTestCase, WKNavigationDelegate, WKScriptMessageHandler {
@@ -87,6 +88,71 @@ final class VimKeyTests: XCTestCase, WKNavigationDelegate, WKScriptMessageHandle
         press(view, "v", "l", "l")
         _ = js(view, "getSelection().removeAllRanges(); window.dispatchEvent(new FocusEvent('focus')); ''")
         XCTAssertEqual(js(view, "getSelection().toString()"), "al")
+    }
+
+    func testMouseDragSelectsBottomSequenceLabelWithoutJumpingScroll() throws {
+        let view = loadViewer("placeholder\n")
+        let window = NSWindow(contentRect: view.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = view
+        window.makeKeyAndOrderFront(nil)
+        defer { window.close() }
+
+        let messages = (1...12).map { "Alice->>Bob: Message \($0)" }.joined(separator: "\n")
+        let markdown = "before\n\n```mermaid\nsequenceDiagram\nparticipant Alice\nparticipant Bob\n" + messages + "\n```\n\n" + String(repeating: "after\n\n", count: 30)
+        let source = String(data: try JSONEncoder().encode(markdown), encoding: .utf8)!
+        _ = js(view, "window.quickMarkview.setDocument(\(source), null, 2); ''")
+        // Wait for Mermaid's SVG rather than requestAnimationFrame, which can
+        // be throttled when XCTest's window is not the foreground application.
+        var rendered = false
+        for _ in 0..<20 {
+            if js(view, "String(!!document.querySelector('.mermaid svg text.actor'))") == "true" { rendered = true; break }
+            settleRender(view)
+        }
+        XCTAssertTrue(rendered)
+        let position = try XCTUnwrap(js(view, """
+        const label = [...document.querySelectorAll('.mermaid svg text.actor')]
+            .filter(t => t.textContent === 'Bob')
+            .sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top).pop();
+        label.scrollIntoView({block: 'center'});
+        const rect = label.getBoundingClientRect();
+        JSON.stringify({x: rect.x, y: rect.y + rect.height / 2, width: rect.width, scroll: scrollY})
+        """))
+        let rect = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(position.utf8)) as? [String: Double])
+        let x = try XCTUnwrap(rect["x"]), y = try XCTUnwrap(rect["y"]), width = try XCTUnwrap(rect["width"])
+        XCTAssertGreaterThan(try XCTUnwrap(rect["scroll"]), 0)
+
+        func mouse(_ type: NSEvent.EventType, x: Double) throws {
+            let location = view.convert(NSPoint(x: x, y: view.isFlipped ? y : view.bounds.height - y), to: nil)
+            let event = try XCTUnwrap(NSEvent.mouseEvent(with: type, location: location, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil, eventNumber: 1, clickCount: 1, pressure: 1))
+            switch type {
+            case .leftMouseDown: view.mouseDown(with: event)
+            case .leftMouseDragged: view.mouseDragged(with: event)
+            default: view.mouseUp(with: event)
+            }
+            let delivered = expectation(description: "mouse event is processed")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { delivered.fulfill() }
+            wait(for: [delivered], timeout: 2)
+        }
+
+        try mouse(.leftMouseDown, x: x + 1)
+        for step in 1...8 { try mouse(.leftMouseDragged, x: x + 1 + (width - 2) * Double(step) / 8) }
+        try mouse(.leftMouseUp, x: x + width - 1)
+        XCTAssertEqual(js(view, "getSelection().toString()"), "Bob")
+        XCTAssertEqual(Double(js(view, "String(scrollY)") ?? ""), rect["scroll"])
+        XCTAssertEqual(lastSelection?["text"] as? String, "Bob")
+        XCTAssertEqual(lastSelection?["lineStart"] as? Int, 3)
+        XCTAssertEqual(lastSelection?["lineEnd"] as? Int, 19)
+    }
+
+    func testKeyboardDocumentMotionsKeepCursorVisible() {
+        let view = loadViewer((1...80).map { "line \($0)" }.joined(separator: "\n\n"))
+        press(view, "G")
+        XCTAssertGreaterThan(Double(js(view, "String(scrollY)") ?? "") ?? 0, 0)
+        XCTAssertEqual(js(view, "String(document.getElementById('cursor').getBoundingClientRect().bottom <= innerHeight)"), "true")
+        press(view, "g", "g")
+        XCTAssertEqual(js(view, "String(document.getElementById('cursor').getBoundingClientRect().top >= 0 && scrollY < innerHeight)"), "true")
+        XCTAssertEqual(js(view, "getSelection().focusNode.textContent"), "line 1")
     }
 
     func testUnboundKeysAreNotSwallowed() {
