@@ -97,6 +97,52 @@ final class VimKeyTests: XCTestCase, WKNavigationDelegate, WKScriptMessageHandle
         XCTAssertEqual(js(view, "String(document.dispatchEvent(new KeyboardEvent('keydown', {key: 'f', ctrlKey: true, cancelable: true})))"), "false")
     }
 
+    func testTableArrowsMoveBetweenRowsInTheSameColumn() {
+        let view = loadViewer("| Left | Right |\n| --- | --- |\n| alpha | one |\n| gamma | three |\n")
+        _ = js(view, "getSelection().collapse(document.querySelectorAll('th')[1].firstChild, 0); ''")
+        press(view, "ArrowDown")
+        XCTAssertEqual(js(view, "getSelection().focusNode.textContent"), "one")
+        press(view, "ArrowDown")
+        XCTAssertEqual(js(view, "getSelection().focusNode.textContent"), "three")
+        press(view, "ArrowDown")
+        XCTAssertEqual(js(view, "getSelection().focusNode.textContent"), "three")
+        press(view, "ArrowUp")
+        XCTAssertEqual(js(view, "getSelection().focusNode.textContent"), "one")
+        press(view, "ArrowUp", "ArrowUp")
+        XCTAssertEqual(js(view, "getSelection().focusNode.textContent"), "Right")
+    }
+
+    func testShiftTableArrowsMoveWithinCellAndStopAtItsEdges() {
+        let view = loadViewer("before\n\n| Left | Right |\n| --- | --- |\n| alpha beta | one two |\n| gamma | three |\n\nafter\n")
+        // Give the rendered cell two deterministic display lines.
+        _ = js(view, "document.querySelector('td').innerHTML = 'alpha<br>beta'; getSelection().collapse(document.querySelector('td').firstChild, 0); ''")
+        press(view, "<S-ArrowDown>")
+        XCTAssertEqual(js(view, "getSelection().focusNode.textContent"), "beta")
+        XCTAssertEqual(js(view, "getSelection().isCollapsed"), "1")
+        press(view, "<S-ArrowDown>")
+        XCTAssertEqual(js(view, "getSelection().focusNode.textContent"), "beta")
+        press(view, "<S-ArrowUp>", "<S-ArrowUp>")
+        XCTAssertEqual(js(view, "getSelection().focusNode.textContent"), "alpha")
+
+        press(view, "v", "<S-ArrowDown>")
+        XCTAssertEqual(js(view, "getSelection().focusNode.textContent"), "beta")
+        XCTAssertEqual(js(view, "getSelection().isCollapsed"), "0")
+        let selected = js(view, "getSelection().toString()")
+        press(view, "<S-ArrowDown>")
+        XCTAssertEqual(js(view, "getSelection().toString()"), selected)
+        press(view, "Escape", "ArrowDown")
+        XCTAssertEqual(js(view, "getSelection().focusNode.textContent"), "gamma")
+    }
+
+    func testArrowsOutsideTableKeepNativeHandling() {
+        let view = loadViewer("plain text\n")
+        for key in ["ArrowUp", "ArrowDown"] {
+            for shift in [false, true] {
+                XCTAssertEqual(js(view, "String(document.dispatchEvent(new KeyboardEvent('keydown', {key: '\(key)', shiftKey: \(shift), cancelable: true})))"), "true")
+            }
+        }
+    }
+
     func testSidebarStartsHiddenAndToggles() {
         let view = loadViewer("# One\n\ntext\n")
         let width = "String(document.getElementById('toc').offsetWidth)"
@@ -140,6 +186,16 @@ final class VimKeyTests: XCTestCase, WKNavigationDelegate, WKScriptMessageHandle
         XCTAssertNil(lastOpenLink)
     }
 
+    func testControlArrowsRequestPreviousAndNextMarkdown() {
+        let view = loadViewer("# One\n\ntext\n")
+        awaitMessage("navigateFile") { press(view, "<C-ArrowRight>") }
+        XCTAssertEqual(lastMessage?["direction"] as? String, "next")
+        XCTAssertEqual(lastMessage?["fromLine"] as? Int, 1)
+        awaitMessage("navigateFile") { press(view, "<C-ArrowLeft>") }
+        XCTAssertEqual(lastMessage?["direction"] as? String, "previous")
+        XCTAssertEqual(js(view, "String(document.dispatchEvent(new KeyboardEvent('keydown', {key: 'ArrowRight', ctrlKey: true, shiftKey: true, cancelable: true})))"), "true")
+    }
+
     private func loadViewer(_ markdown: String) -> WKWebView {
         let root = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
@@ -159,8 +215,9 @@ final class VimKeyTests: XCTestCase, WKNavigationDelegate, WKScriptMessageHandle
     private func press(_ view: WKWebView, _ keys: String...) {
         for key in keys {
             let control = key.hasPrefix("<C-")
-            let name = control ? String(key.dropFirst(3).dropLast()) : key
-            _ = js(view, "document.dispatchEvent(new KeyboardEvent('keydown', {key: '\(name)', ctrlKey: \(control), cancelable: true})); ''")
+            let shift = key.hasPrefix("<S-")
+            let name = control || shift ? String(key.dropFirst(3).dropLast()) : key
+            _ = js(view, "document.dispatchEvent(new KeyboardEvent('keydown', {key: '\(name)', ctrlKey: \(control), shiftKey: \(shift), cancelable: true})); ''")
         }
     }
 

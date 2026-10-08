@@ -51,6 +51,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 return nil
             }
             guard let self, let window = self.window, event.window === window else { return event }
+            if self.controller.handleFileNavigationKey(event) { return nil }
             if self.controller?.isTextEditActive == true { return event }
             guard Self.closesViewer(characters: event.characters, firstResponder: window.firstResponder) else { return event }
             switch Self.quitAction(resident: self.options.resident) {
@@ -162,6 +163,7 @@ final class ViewerViewController: NSViewController, WKNavigationDelegate, WKScri
     private var isSending = false
     private var alternate: (url: URL, line: Int)?
     private var finderGeneration = 0
+    private var isNavigatingFile = false
     private var isEditingText = false
     private var isSavingTextEdit = false
     private var pendingFileChange = false
@@ -469,6 +471,54 @@ final class ViewerViewController: NSViewController, WKNavigationDelegate, WKScri
         }
     }
 
+    static func fileNavigationDirection(for event: NSEvent) -> MarkdownFileNavigation.Direction? {
+        let modifiers = event.modifierFlags.intersection([.control, .command, .option, .shift])
+        guard modifiers == .control else { return nil }
+        switch Int(event.keyCode) {
+        case kVK_LeftArrow: return .previous
+        case kVK_RightArrow: return .next
+        default: return nil
+        }
+    }
+
+    /// Capture native arrow events before AppKit/WebKit can use them as cursor motions.
+    func handleFileNavigationKey(_ event: NSEvent) -> Bool {
+        guard let direction = Self.fileNavigationDirection(for: event), document != nil,
+              !isEditingText, requestPanel.isHidden, fileFinder.isHidden,
+              !(view.window?.firstResponder is NSTextView) else { return false }
+        if isNavigatingFile { return true }
+        let sourceRevision = revision
+        isNavigatingFile = true
+        webView.evaluateJavaScript("window.quickMarkview.visibleLine();") { [weak self] value, _ in
+            guard let self else { return }
+            self.isNavigatingFile = false
+            guard self.revision == sourceRevision else { return }
+            self.navigateMarkdownFile(direction: direction, fromLine: (value as? NSNumber)?.intValue ?? 1)
+        }
+        return true
+    }
+
+    private func navigateMarkdownFile(direction: MarkdownFileNavigation.Direction, fromLine: Int) {
+        guard let document, !isNavigatingFile, !isEditingText, requestPanel.isHidden, fileFinder.isHidden else { return }
+        let sourceRevision = revision
+        let currentURL = document.url
+        isNavigatingFile = true
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let target = MarkdownFileNavigation.adjacent(to: currentURL, direction: direction)
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.isNavigatingFile = false
+                guard self.revision == sourceRevision, !self.isEditingText,
+                      self.requestPanel.isHidden, self.fileFinder.isHidden else { return }
+                guard let target else {
+                    self.statusLabel.stringValue = "No \(direction == .next ? "next" : "previous") Markdown file."
+                    return
+                }
+                if self.open(url: target, line: nil) { self.alternate = (currentURL, max(1, fromLine)) }
+            }
+        }
+    }
+
     private func refreshTargets() {
         guard let originPaneID else { statusLabel.stringValue = "WEZTERM_PANE is not set; open from WezTerm or pass --pane."; return }
         service.listPanes { [weak self] result in DispatchQueue.main.async {
@@ -559,6 +609,11 @@ final class ViewerViewController: NSViewController, WKNavigationDelegate, WKScri
         }
         if type == "editUnavailable" { statusLabel.stringValue = "This text cannot be edited yet."; return }
         if type == "editText" { handleTextEdit(body); return }
+        if type == "navigateFile" {
+            guard let value = body["direction"] as? String, value == "next" || value == "previous" else { return }
+            navigateMarkdownFile(direction: value == "next" ? .next : .previous, fromLine: body["fromLine"] as? Int ?? 1)
+            return
+        }
         if type == "openLink" {
             guard let href = body["href"] as? String, let document else { return }
             let fromLine = body["fromLine"] as? Int ?? 1

@@ -2,6 +2,7 @@
 import XCTest
 import AppKit
 import WebKit
+import Carbon.HIToolbox
 @testable import QuickMarkview
 
 @MainActor
@@ -16,6 +17,51 @@ final class WebKitSmokeTests: XCTestCase, WKNavigationDelegate, WKScriptMessageH
         XCTAssertFalse(AppDelegate.closesViewer(characters: "q", firstResponder: NSTextView()))
         XCTAssertFalse(AppDelegate.closesViewer(characters: "Q", firstResponder: WKWebView()))
         XCTAssertFalse(AppDelegate.closesViewer(characters: "w", firstResponder: nil))
+    }
+
+    func testNativeControlArrowsMapToFileNavigation() throws {
+        func key(_ code: Int, _ modifiers: NSEvent.ModifierFlags) throws -> NSEvent {
+            try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: modifiers,
+                timestamp: 0, windowNumber: 0, context: nil, characters: "", charactersIgnoringModifiers: "", isARepeat: false, keyCode: UInt16(code)))
+        }
+        XCTAssertEqual(ViewerViewController.fileNavigationDirection(for: try key(kVK_LeftArrow, [.control])), .previous)
+        XCTAssertEqual(ViewerViewController.fileNavigationDirection(for: try key(kVK_RightArrow, [.control, .function, .numericPad])), .next)
+        XCTAssertNil(ViewerViewController.fileNavigationDirection(for: try key(kVK_RightArrow, [])))
+        XCTAssertNil(ViewerViewController.fileNavigationDirection(for: try key(kVK_RightArrow, [.control, .shift])))
+        XCTAssertNil(ViewerViewController.fileNavigationDirection(for: try key(kVK_RightArrow, [.control, .option])))
+        XCTAssertNil(ViewerViewController.fileNavigationDirection(for: try key(kVK_UpArrow, [.control])))
+    }
+
+    func testNativeControlArrowsActuallyOpenAdjacentMarkdown() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("quickmarkview-native-navigation-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let first = root.appendingPathComponent("a.md"), next = root.appendingPathComponent("b.md")
+        try Data("# First\n".utf8).write(to: first)
+        try Data("# Next\n".utf8).write(to: next)
+        let controller = ViewerViewController(options: try LaunchOptions(arguments: []))
+        controller.loadView()
+        XCTAssertTrue(controller.open(url: first, line: nil))
+
+        func navigate(_ code: Int, to target: URL) throws {
+            let event = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero,
+                modifierFlags: [.control, .function, .numericPad], timestamp: 0, windowNumber: 0,
+                context: nil, characters: "", charactersIgnoringModifiers: "", isARepeat: false, keyCode: UInt16(code)))
+            XCTAssertTrue(controller.handleFileNavigationKey(event))
+            for _ in 0..<40 {
+                let tick = expectation(description: "native navigation completes")
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { tick.fulfill() }
+                wait(for: [tick], timeout: 1)
+                if descendants(of: controller.view).compactMap({ $0 as? NSTextField }).contains(where: { $0.stringValue == target.path }) { return }
+            }
+            XCTFail("Native Ctrl+arrow did not open \(target.lastPathComponent)")
+        }
+        try navigate(kVK_RightArrow, to: next)
+        try navigate(kVK_LeftArrow, to: first)
+        controller.requestPanel.isHidden = false
+        let event = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [.control],
+            timestamp: 0, windowNumber: 0, context: nil, characters: "", charactersIgnoringModifiers: "", isARepeat: false, keyCode: UInt16(kVK_RightArrow)))
+        XCTAssertFalse(controller.handleFileNavigationKey(event))
     }
 
     func testQuitActionHidesOnlyInResidentMode() {

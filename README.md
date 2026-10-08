@@ -62,6 +62,8 @@ The viewer has a Vim-style cursor:
 h j k l     Move by character / line.
 e           Edit the Markdown source of the paragraph, heading, list item, or table cell under the cursor; Enter saves, Shift+Enter adds a line (paragraphs), Esc cancels.
 J K         Move to the same column in the next / previous table row.
+↓ ↑         Move to the same column in the next / previous table row.
+Shift+↓/↑   Move by rendered line within the current table cell.
 <Tab>       Move to the next table cell.
 0 $         Line start / end.
 gg G        Document start / end.
@@ -71,7 +73,11 @@ V           Toggle linewise visual selection over whole rendered lines.
 <Space>aa   Open the request panel for the current selection.
 <C-]>       Open the local link under the cursor; clicking a local link also follows it.
 <C-^>       Switch to the alternate file (press again to switch back).
+<C-Left>    Open the previous Markdown file.
+<C-Right>   Open the next Markdown file.
 ```
+
+Ctrl+Left/Right follows filename order within the current folder, skipping hidden items and non-Markdown files. At the folder's edge it searches the previous/next sibling folders, including their descendants in directory-first order. Empty folders are skipped; navigation stops when no candidate remains. This follows `file_navigation.lua` and does not ascend to higher ancestors. Ctrl+^ returns to the file you just left.
 
 Dragging with the mouse also selects. The viewer reports the nearest Markdown block source range and the selected rendered text. The request panel is a native text view prefilled with the full prompt in the same shape as the existing Neovim integration: source file, line range, an empty `Request:` section where the cursor starts, and the `<selection>` tags. Edit any part of it, then press Shift+Enter to send exactly that text, or Esc to cancel. Start the first line with `/btw` for a side chat request (supported by both Codex and Claude Code). A file reload clears the selection, and a revision check prevents a stale WebKit selection from being sent after a reload.
 

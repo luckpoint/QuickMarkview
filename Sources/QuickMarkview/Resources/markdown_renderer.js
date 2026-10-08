@@ -203,6 +203,17 @@
     moveToCell(row.cells[cell.cellIndex + 1] || (nextRow && nextRow.cells[0]));
   }
 
+  function cellLineStep(cell, direction) {
+    move((selection, alter) => {
+      const origin = caret();
+      selection.modify(alter, direction, "line");
+      if (!cell.contains(selection.focusNode)) {
+        if (alter === "extend") selection.extend(...origin);
+        else selection.collapse(...origin);
+      }
+    });
+  }
+
   function sourceLineBounds(lineNumber) {
     if (!Number.isInteger(lineNumber) || lineNumber < 1) return null;
     let start = 0;
@@ -511,6 +522,23 @@
 
   document.addEventListener("keydown", event => {
     if (event.metaKey || event.altKey || event.isComposing) return;
+    if (event.ctrlKey && !event.shiftKey && (event.key === "ArrowLeft" || event.key === "ArrowRight")) {
+      event.preventDefault();
+      pending = "";
+      post({type: "navigateFile", direction: event.key === "ArrowRight" ? "next" : "previous", fromLine: visibleLine()});
+      return;
+    }
+    if (!event.ctrlKey && (event.key === "ArrowUp" || event.key === "ArrowDown")) {
+      const cell = cellAtCursor();
+      if (cell) {
+        event.preventDefault();
+        pending = "";
+        const down = event.key === "ArrowDown";
+        if (event.shiftKey) cellLineStep(cell, down ? "forward" : "backward");
+        else rowStep(down ? 1 : -1);
+        return;
+      }
+    }
     const key = event.key === "Tab" && !event.shiftKey ? TAB : event.key === "Escape" ? ESC : event.ctrlKey ? controls[event.key] : event.key;
     if (!key || key.length !== 1) return;
     const keys = isPrefix(pending + key) ? pending + key : key;
