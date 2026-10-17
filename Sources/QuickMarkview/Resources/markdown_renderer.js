@@ -6,6 +6,36 @@
   const esc = md.utils.escapeHtml;
   mermaid.initialize({startOnLoad: false, securityLevel: "strict"});
 
+  // Recognize only img tags while keeping arbitrary HTML disabled. Emit normal
+  // image tokens so local resolution, offline policy, and source maps still apply.
+  md.inline.ruler.before("html_inline", "html_image", (state, silent) => {
+    const match = /^<img(?=[\s/>])((?:[^"'<>“”‘’]|"[^"]*"|'[^']*'|“[^”]*”|‘[^’]*’)*?)\s*\/?>/i.exec(state.src.slice(state.pos));
+    if (!match) return false;
+    const attrs = new Map();
+    let remaining = match[1];
+    while (remaining.trim()) {
+      const attr = /^\s+([^\s"'<>/=“”‘’]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|“([^”]*)”|‘([^’]*)’|([^\s"'=<>`“”‘’]+)))?/.exec(remaining);
+      if (!attr) return false;
+      const name = attr[1].toLowerCase();
+      if (!attrs.has(name)) attrs.set(name, md.utils.unescapeAll(attr.slice(2).find(value => value !== undefined) || ""));
+      remaining = remaining.slice(attr[0].length);
+    }
+    if (!silent) {
+      const token = state.push("image", "img", 0);
+      const source = md.normalizeLink(attrs.get("src") || "");
+      token.attrSet("src", md.validateLink(source) ? source : "#");
+      token.attrSet("alt", attrs.get("alt") || "");
+      if (attrs.has("title")) token.attrSet("title", attrs.get("title"));
+      for (const name of ["width", "height"]) {
+        const value = attrs.get(name);
+        if (value && /^\d+(?:\.\d+)?%?$/.test(value)) token.attrSet(name, value);
+      }
+      token.children = [];
+    }
+    state.pos += match[0].length;
+    return true;
+  });
+
   function highlightedCode(source, language) {
     const resolved = hljs.getLanguage(language) ? language : "plaintext";
     return hljs.highlight(source, {language: resolved}).value;

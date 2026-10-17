@@ -81,9 +81,11 @@ Ctrl+Left/Right follows filename order within the current folder, skipping hidde
 
 Dragging with the mouse also selects. The viewer reports the nearest Markdown block source range and the selected rendered text. The request panel is a native text view prefilled with the full prompt in the same shape as the existing Neovim integration: source file, line range, an empty `Request:` section where the cursor starts, and the `<selection>` tags. Edit any part of it, then press Shift+Enter to send exactly that text, or Esc to cancel. Start the first line with `/btw` for a side chat request (supported by both Codex and Claude Code). A file reload clears the selection, and a revision check prevents a stale WebKit selection from being sent after a reload.
 
-Links are rendered with HTML disabled. Use `<C-]>` or click a local file link to follow it, then `<C-^>` to switch between the current and previous file. `http`, `https`, and `mailto` links open externally only when clicked or followed from the cursor. Arbitrary WebKit file navigation is rejected. Markdown images are limited to safe URL schemes by markdown-it's renderer policy.
+HTML is disabled except for `img` tags. Use `<C-]>` or click a local file link to follow it, then `<C-^>` to switch between the current and previous file. `http`, `https`, and `mailto` links open externally only when clicked or followed from the cursor. Arbitrary WebKit file navigation is rejected. Images are limited to safe URL schemes by markdown-it's renderer policy.
 
 Markdown images are resolved relative to the opened Markdown file and displayed when the local image file exists. Image bytes are passed to the viewer directly, so the WebKit page does not need broader filesystem access. Remote images are replaced with a local placeholder and never fetched.
+
+HTML images use the same local image resolution: `<img src="images/screenshot.png" alt="Screenshot" width="30%">`. Supported attributes are `src`, `alt`, `title`, `width`, and `height`; dimensions accept numbers (pixels) or percentages. Smart quotes (`“…”` and `‘…’`) are also accepted around attribute values. Other HTML tags remain plain text.
 
 ## Development
 

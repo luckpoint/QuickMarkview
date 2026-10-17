@@ -10,7 +10,60 @@ final class VimKeyTests: XCTestCase, WKNavigationDelegate, WKScriptMessageHandle
     private var lastSelection: [String: Any]?
     private var lastMessage: [String: Any]?
     private var lastOpenLink: [String: Any]?
+    private var lastImageSources: [String]?
     private var result: String?
+
+    func testHTMLImageWithSmartQuotesUsesLocalImageResolutionAndPercentageWidth() {
+        let view = loadViewer("<img src=“images/screenshot.png” alt=“iOSブラウザ比較アプリの画面” width=“30%”>\n")
+        XCTAssertEqual(lastImageSources, ["images/screenshot.png"])
+        XCTAssertEqual(js(view, "document.querySelector('img').getAttribute('alt')"), "iOSブラウザ比較アプリの画面")
+        XCTAssertEqual(js(view, "document.querySelector('img').getAttribute('width')"), "30%")
+        XCTAssertEqual(js(view, "document.querySelector('img').closest('[data-source-start]').dataset.sourceStart"), "1")
+        let pixel = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a1ioAAAAASUVORK5CYII="
+        _ = js(view, "window.quickMarkview.setImageSources(1, {'images/screenshot.png': '\(pixel)'}); ''")
+        XCTAssertEqual(js(view, "document.querySelector('img').getAttribute('src')"), pixel)
+        XCTAssertEqual(js(view, "String(Math.abs(document.querySelector('img').getBoundingClientRect().width / document.querySelector('img').parentElement.getBoundingClientRect().width - 0.3) < 0.01)"), "true")
+    }
+
+    func testHTMLImagesSupportInlineAndMultilineAttributesButLeaveCodeLiteral() {
+        let view = loadViewer("""
+        before <IMG SRC='images/a.png' alt="A &amp; B > C" width=120 height='80' /> after
+
+        <img
+          src="images/b.png"
+          width="50%">
+
+        `<img src="code.png">`
+
+        ```html
+        <img src="fence.png">
+        ```
+
+        ![Markdown](images/c.png)
+        """)
+        XCTAssertEqual(Set(lastImageSources ?? []), Set(["images/a.png", "images/b.png", "images/c.png"]))
+        XCTAssertEqual(js(view, "String(document.querySelectorAll('#content img').length)"), "3")
+        XCTAssertEqual(js(view, "document.querySelector('img').alt"), "A & B > C")
+        XCTAssertEqual(js(view, "document.querySelector('img').getAttribute('height')"), "80")
+        XCTAssertEqual(js(view, "document.querySelectorAll('#content img')[1].closest('[data-source-start]').dataset.sourceEnd"), "5")
+        XCTAssertEqual(js(view, "document.querySelector('#content code').textContent"), "<img src=\"code.png\">")
+    }
+
+    func testHTMLImagesKeepHTMLDisabledAndFilterUnsafeAttributesAndSources() {
+        let view = loadViewer("""
+        <script>alert('test')</script>
+
+        <img src="https://example.com/a.png" onerror="alert(1)" srcset="https://example.com/b.png 2x" style="position:fixed" width="bad">
+
+        <img src="javascript&#58;alert(1)">
+
+        <img src="//example.com/c.png">
+
+        <iframe src="https://example.com"></iframe>
+        """)
+        XCTAssertEqual(js(view, "String(document.querySelectorAll('#content script, #content iframe, #content [onerror], #content [srcset], #content [style], #content img[width]').length)"), "0")
+        XCTAssertEqual(js(view, "JSON.stringify([...document.querySelectorAll('#content img')].map(image => image.getAttribute('src')))"), "[\"#\",\"#\",\"#\"]")
+    }
 
     func testMotionsVisualSelectionAndRequestSequence() {
         let view = loadViewer("# One\n\nalpha beta\n\ngamma delta\n")
@@ -319,6 +372,7 @@ final class VimKeyTests: XCTestCase, WKNavigationDelegate, WKScriptMessageHandle
         lastMessage = body
         if type == "selection" { lastSelection = body }
         if type == "openLink" { lastOpenLink = body }
+        if type == "resolveImages" { lastImageSources = body["sources"] as? [String] }
         if type == awaited?.type { awaited?.expectation.fulfill() }
     }
 }
