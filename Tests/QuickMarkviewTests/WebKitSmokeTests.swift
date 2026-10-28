@@ -75,6 +75,50 @@ final class WebKitSmokeTests: XCTestCase, WKNavigationDelegate, WKScriptMessageH
         XCTAssertEqual(item?.action, #selector(ViewerViewController.toggleSidebar(_:)))
     }
 
+    func testCommandFShowsFind() {
+        let item = AppDelegate.mainMenu().items.flatMap { $0.submenu?.items ?? [] }.first { $0.keyEquivalent == "f" }
+        XCTAssertEqual(item?.keyEquivalentModifierMask, .command)
+        XCTAssertEqual(item?.action, #selector(ViewerViewController.showFind(_:)))
+    }
+
+    func testFindSelectsMatchesForwardAndBackward() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Sources/QuickMarkview/Resources")
+        let controller = ViewerViewController(options: try LaunchOptions(arguments: []))
+        let window = NSWindow(contentViewController: controller)
+        window.setContentSize(NSSize(width: 800, height: 600))
+        let webView = try XCTUnwrap(descendants(of: controller.view).compactMap { $0 as? WKWebView }.first)
+        webView.navigationDelegate = self
+        loaded = expectation(description: "viewer loads for find")
+        smokeRenderAfterLoad = false
+        webView.loadFileURL(root.appendingPathComponent("viewer.html"), allowingReadAccessTo: root)
+        wait(for: [loaded!], timeout: 5)
+        webView.evaluateJavaScript("window.quickMarkview.setDocument('alpha needle one\\n\\nbeta needle two', null, 1);")
+        controller.showFind(nil)
+        XCTAssertFalse(controller.findField.isHidden)
+        XCTAssertTrue(window.firstResponder === controller.findField.currentEditor())
+        controller.findField.stringValue = "needle"
+
+        func evaluate(_ script: String, after delay: TimeInterval = 0.1) -> String {
+            var result = ""
+            let done = expectation(description: "script evaluates")
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                webView.evaluateJavaScript(script) { value, _ in result = value as? String ?? ""; done.fulfill() }
+            }
+            wait(for: [done], timeout: 2)
+            return result
+        }
+        for _ in 0..<40 { if evaluate("document.body.innerText").contains("needle") { break } }
+        let selection = "window.getSelection().toString() + '|' + window.getSelection().anchorNode.parentElement.textContent"
+        controller.find(backwards: false)
+        XCTAssertEqual(evaluate(selection, after: 0.3), "needle|alpha needle one")
+        controller.find(backwards: false)
+        XCTAssertEqual(evaluate(selection, after: 0.3), "needle|beta needle two")
+        controller.find(backwards: true)
+        XCTAssertEqual(evaluate(selection, after: 0.3), "needle|alpha needle one")
+    }
+
     func testLaunchFrameFillsLeftTwoThirdsOfScreen() {
         let frame = AppDelegate.launchFrame(in: NSRect(x: 0, y: 25, width: 1800, height: 1100))
         XCTAssertEqual(frame, NSRect(x: 0, y: 25, width: 1195, height: 1100))
@@ -115,7 +159,8 @@ final class WebKitSmokeTests: XCTestCase, WKNavigationDelegate, WKScriptMessageH
         XCTAssertEqual(webViews[0].frame.width, 1200)
         XCTAssertEqual(webViews[0].frame.height, 820 - 46)
         XCTAssertTrue(controller.requestPanel.isHidden)
-        XCTAssertTrue(descendants(of: controller.view).compactMap { $0 as? NSTextField }.allSatisfy { !$0.isEditable })
+        XCTAssertTrue(controller.findField.isHidden)
+        XCTAssertTrue(descendants(of: controller.view).compactMap { $0 as? NSTextField }.allSatisfy { !$0.isEditable || $0.isHiddenOrHasHiddenAncestor })
     }
 
     func testCodeFilesHighlightEachLineAndContinueMultilineSpans() {

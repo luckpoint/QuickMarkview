@@ -126,6 +126,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         editMenu.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
         editMenu.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
         editMenu.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        editMenu.addItem(.separator())
+        editMenu.addItem(withTitle: "Find…", action: #selector(ViewerViewController.showFind(_:)), keyEquivalent: "f")
         editItem.submenu = editMenu; menu.addItem(editItem)
 
         let viewItem = NSMenuItem(); let viewMenu = NSMenu(title: "View")
@@ -146,7 +148,7 @@ private enum TextEditError: Error {
 }
 
 @MainActor
-final class ViewerViewController: NSViewController, WKNavigationDelegate, WKScriptMessageHandler, NSTextViewDelegate {
+final class ViewerViewController: NSViewController, WKNavigationDelegate, WKScriptMessageHandler, NSTextViewDelegate, NSSearchFieldDelegate {
     private let options: LaunchOptions
     private let service = WezTermService()
     private var watcher: FileWatcher?
@@ -180,6 +182,7 @@ final class ViewerViewController: NSViewController, WKNavigationDelegate, WKScri
     private var requestView: NSTextView { requestScroll.documentView as! NSTextView }
     let requestPanel = NSVisualEffectView()
     private let fileFinder = FileFinderView(frame: .zero)
+    let findField = NSSearchField()
     private var webView: WKWebView!
 
     private static let idleStatus = "v/V select · Space a a request · q quit"
@@ -199,12 +202,14 @@ final class ViewerViewController: NSViewController, WKNavigationDelegate, WKScri
         fileFinder.isHidden = true
         fileFinder.onChoose = { [weak self] url in self?.chooseMarkdownFile(url) }
         fileFinder.onCancel = { [weak self] in self?.hideFileFinder() }
-        for subview in [toolbar, page, panel, fileFinder] { subview.translatesAutoresizingMaskIntoConstraints = false; root.addSubview(subview) }
+        findField.isHidden = true; findField.placeholderString = "Find · ↩ next · ⇧↩ previous · esc close"; findField.delegate = self
+        for subview in [toolbar, page, panel, fileFinder, findField] { subview.translatesAutoresizingMaskIntoConstraints = false; root.addSubview(subview) }
         NSLayoutConstraint.activate([
             toolbar.topAnchor.constraint(equalTo: root.topAnchor), toolbar.leadingAnchor.constraint(equalTo: root.leadingAnchor), toolbar.trailingAnchor.constraint(equalTo: root.trailingAnchor), toolbar.heightAnchor.constraint(equalToConstant: 46),
             page.topAnchor.constraint(equalTo: toolbar.bottomAnchor), page.leadingAnchor.constraint(equalTo: root.leadingAnchor), page.trailingAnchor.constraint(equalTo: root.trailingAnchor), page.bottomAnchor.constraint(equalTo: root.bottomAnchor),
             panel.centerXAnchor.constraint(equalTo: root.centerXAnchor), panel.widthAnchor.constraint(equalTo: root.widthAnchor, multiplier: 0.7), panel.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -24), panel.heightAnchor.constraint(equalTo: root.heightAnchor, multiplier: 0.5),
-            fileFinder.centerXAnchor.constraint(equalTo: root.centerXAnchor), fileFinder.centerYAnchor.constraint(equalTo: root.centerYAnchor, constant: 40), fileFinder.widthAnchor.constraint(equalTo: root.widthAnchor, multiplier: 0.6), fileFinder.heightAnchor.constraint(equalTo: root.heightAnchor, multiplier: 0.55)
+            fileFinder.centerXAnchor.constraint(equalTo: root.centerXAnchor), fileFinder.centerYAnchor.constraint(equalTo: root.centerYAnchor, constant: 40), fileFinder.widthAnchor.constraint(equalTo: root.widthAnchor, multiplier: 0.6), fileFinder.heightAnchor.constraint(equalTo: root.heightAnchor, multiplier: 0.55),
+            findField.topAnchor.constraint(equalTo: toolbar.bottomAnchor, constant: 8), findField.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -16), findField.widthAnchor.constraint(equalToConstant: 300)
         ])
         self.view = root
     }
@@ -450,6 +455,34 @@ final class ViewerViewController: NSViewController, WKNavigationDelegate, WKScri
                 self.fileFinder.focusSearchField()
             }
         }
+    }
+
+    @objc func showFind(_ sender: Any?) {
+        if !fileFinder.isHidden { hideFileFinder() }
+        findField.isHidden = false
+        view.window?.makeFirstResponder(findField)
+        findField.currentEditor()?.selectAll(nil)
+    }
+
+    private func hideFind() {
+        findField.isHidden = true
+        view.window?.makeFirstResponder(webView)
+    }
+
+    func find(backwards: Bool) {
+        let query = findField.stringValue
+        guard !query.isEmpty else { return }
+        let configuration = WKFindConfiguration(); configuration.backwards = backwards
+        webView.find(query, configuration: configuration) { [weak self] result in
+            self?.statusLabel.stringValue = result.matchFound ? Self.idleStatus : "Not found: \(query)"
+        }
+    }
+
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+        guard control === findField else { return false }
+        if selector == #selector(NSResponder.cancelOperation(_:)) { hideFind(); return true }
+        guard selector == #selector(NSResponder.insertNewline(_:)) else { return false }
+        find(backwards: NSApp.currentEvent?.modifierFlags.contains(.shift) == true); return true
     }
 
     private func hideFileFinder() {
