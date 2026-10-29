@@ -183,6 +183,8 @@ final class ViewerViewController: NSViewController, WKNavigationDelegate, WKScri
     let requestPanel = NSVisualEffectView()
     private let fileFinder = FileFinderView(frame: .zero)
     let findField = NSSearchField()
+    let findCount = NSTextField(labelWithString: "")
+    let findBar = NSVisualEffectView()
     private var webView: WKWebView!
 
     private static let idleStatus = "v/V select · Space a a request · q quit"
@@ -202,14 +204,14 @@ final class ViewerViewController: NSViewController, WKNavigationDelegate, WKScri
         fileFinder.isHidden = true
         fileFinder.onChoose = { [weak self] url in self?.chooseMarkdownFile(url) }
         fileFinder.onCancel = { [weak self] in self?.hideFileFinder() }
-        findField.isHidden = true; findField.placeholderString = "Find · ↩ next · ⇧↩ previous · esc close"; findField.delegate = self
-        for subview in [toolbar, page, panel, fileFinder, findField] { subview.translatesAutoresizingMaskIntoConstraints = false; root.addSubview(subview) }
+        let findBar = makeFindBar()
+        for subview in [toolbar, page, panel, fileFinder, findBar] { subview.translatesAutoresizingMaskIntoConstraints = false; root.addSubview(subview) }
         NSLayoutConstraint.activate([
             toolbar.topAnchor.constraint(equalTo: root.topAnchor), toolbar.leadingAnchor.constraint(equalTo: root.leadingAnchor), toolbar.trailingAnchor.constraint(equalTo: root.trailingAnchor), toolbar.heightAnchor.constraint(equalToConstant: 46),
             page.topAnchor.constraint(equalTo: toolbar.bottomAnchor), page.leadingAnchor.constraint(equalTo: root.leadingAnchor), page.trailingAnchor.constraint(equalTo: root.trailingAnchor), page.bottomAnchor.constraint(equalTo: root.bottomAnchor),
             panel.centerXAnchor.constraint(equalTo: root.centerXAnchor), panel.widthAnchor.constraint(equalTo: root.widthAnchor, multiplier: 0.7), panel.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -24), panel.heightAnchor.constraint(equalTo: root.heightAnchor, multiplier: 0.5),
             fileFinder.centerXAnchor.constraint(equalTo: root.centerXAnchor), fileFinder.centerYAnchor.constraint(equalTo: root.centerYAnchor, constant: 40), fileFinder.widthAnchor.constraint(equalTo: root.widthAnchor, multiplier: 0.6), fileFinder.heightAnchor.constraint(equalTo: root.heightAnchor, multiplier: 0.55),
-            findField.topAnchor.constraint(equalTo: toolbar.bottomAnchor, constant: 8), findField.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -16), findField.widthAnchor.constraint(equalToConstant: 300)
+            findBar.topAnchor.constraint(equalTo: toolbar.bottomAnchor, constant: 8), findBar.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -16), findField.widthAnchor.constraint(equalToConstant: 300)
         ])
         self.view = root
     }
@@ -253,6 +255,15 @@ final class ViewerViewController: NSViewController, WKNavigationDelegate, WKScri
     }
 
     private func constrained(_ view: NSView) -> NSView { view.translatesAutoresizingMaskIntoConstraints = false; if let superview = view.superview { NSLayoutConstraint.activate([view.leadingAnchor.constraint(equalTo: superview.leadingAnchor), view.trailingAnchor.constraint(equalTo: superview.trailingAnchor), view.topAnchor.constraint(equalTo: superview.topAnchor), view.bottomAnchor.constraint(equalTo: superview.bottomAnchor)]) }; return view }
+
+    private func makeFindBar() -> NSView {
+        findField.placeholderString = "Find · ↩ next · ⇧↩ previous · esc close"; findField.delegate = self
+        findCount.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular); findCount.textColor = .secondaryLabelColor
+        let stack = NSStackView(views: [findField, findCount]); stack.spacing = 8; stack.edgeInsets = NSEdgeInsets(top: 6, left: 6, bottom: 6, right: 10)
+        findBar.material = .popover; findBar.state = .active; findBar.wantsLayer = true; findBar.layer?.cornerRadius = 8; findBar.isHidden = true
+        findBar.addSubview(stack); _ = constrained(stack)
+        return findBar
+    }
 
     private func makeRequestPanel() -> NSView {
         requestHint.font = .systemFont(ofSize: 11); requestHint.textColor = .secondaryLabelColor
@@ -459,13 +470,13 @@ final class ViewerViewController: NSViewController, WKNavigationDelegate, WKScri
 
     @objc func showFind(_ sender: Any?) {
         if !fileFinder.isHidden { hideFileFinder() }
-        findField.isHidden = false
+        findBar.isHidden = false
         view.window?.makeFirstResponder(findField)
         findField.currentEditor()?.selectAll(nil)
     }
 
     private func hideFind() {
-        findField.isHidden = true
+        findBar.isHidden = true
         view.window?.makeFirstResponder(webView)
     }
 
@@ -473,9 +484,26 @@ final class ViewerViewController: NSViewController, WKNavigationDelegate, WKScri
         let query = findField.stringValue
         guard !query.isEmpty else { return }
         let configuration = WKFindConfiguration(); configuration.backwards = backwards
-        webView.find(query, configuration: configuration) { [weak self] result in
-            self?.statusLabel.stringValue = result.matchFound ? Self.idleStatus : "Not found: \(query)"
+        webView.find(query, configuration: configuration) { [weak self] _ in self?.updateFindCount() }
+    }
+
+    private func updateFindCount() {
+        let query = findField.stringValue
+        guard !query.isEmpty, let queryLiteral = try? String(data: JSONEncoder().encode(query), encoding: .utf8) else { findCount.stringValue = ""; return }
+        webView.evaluateJavaScript("window.quickMarkview.findStatus(\(queryLiteral));") { [weak self] value, _ in
+            guard let self, self.findField.stringValue == query, let status = value as? [String: Int],
+                  let index = status["index"], let total = status["total"] else { return }
+            self.findCount.stringValue = Self.findCountText(index: index, total: total)
         }
+    }
+
+    static func findCountText(index: Int, total: Int) -> String {
+        if total == 0 { return "No matches" }
+        return index > 0 ? "\(index)/\(total)" : "\(total) matches"
+    }
+
+    func controlTextDidChange(_ notification: Notification) {
+        if notification.object as? NSSearchField === findField { updateFindCount() }
     }
 
     func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {

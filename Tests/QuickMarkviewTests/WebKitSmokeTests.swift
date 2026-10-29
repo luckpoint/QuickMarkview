@@ -94,9 +94,9 @@ final class WebKitSmokeTests: XCTestCase, WKNavigationDelegate, WKScriptMessageH
         smokeRenderAfterLoad = false
         webView.loadFileURL(root.appendingPathComponent("viewer.html"), allowingReadAccessTo: root)
         wait(for: [loaded!], timeout: 5)
-        webView.evaluateJavaScript("window.quickMarkview.setDocument('alpha needle one\\n\\nbeta needle two', null, 1);")
+        webView.evaluateJavaScript("window.quickMarkview.setDocument('alpha needle one\\n\\nbeta NEEDLE two\\n\\n```mermaid\\nflowchart LR\\nA[x] --> B[y]\\n```', null, 1);")
         controller.showFind(nil)
-        XCTAssertFalse(controller.findField.isHidden)
+        XCTAssertFalse(controller.findBar.isHidden)
         XCTAssertTrue(window.firstResponder === controller.findField.currentEditor())
         controller.findField.stringValue = "needle"
 
@@ -113,10 +113,20 @@ final class WebKitSmokeTests: XCTestCase, WKNavigationDelegate, WKScriptMessageH
         let selection = "window.getSelection().toString() + '|' + window.getSelection().anchorNode.parentElement.textContent"
         controller.find(backwards: false)
         XCTAssertEqual(evaluate(selection, after: 0.3), "needle|alpha needle one")
+        XCTAssertEqual(controller.findCount.stringValue, "1/2")
         controller.find(backwards: false)
-        XCTAssertEqual(evaluate(selection, after: 0.3), "needle|beta needle two")
+        XCTAssertEqual(evaluate(selection, after: 0.3), "NEEDLE|beta NEEDLE two")
+        XCTAssertEqual(controller.findCount.stringValue, "2/2")
         controller.find(backwards: true)
         XCTAssertEqual(evaluate(selection, after: 0.3), "needle|alpha needle one")
+        XCTAssertEqual(controller.findCount.stringValue, "1/2")
+        XCTAssertEqual(evaluate("JSON.stringify(window.quickMarkview.findStatus('fill'))"), #"{"index":0,"total":0}"#)
+    }
+
+    func testFindCountText() {
+        XCTAssertEqual(ViewerViewController.findCountText(index: 0, total: 0), "No matches")
+        XCTAssertEqual(ViewerViewController.findCountText(index: 0, total: 3), "3 matches")
+        XCTAssertEqual(ViewerViewController.findCountText(index: 2, total: 3), "2/3")
     }
 
     func testLaunchFrameFillsLeftTwoThirdsOfScreen() {
@@ -159,7 +169,7 @@ final class WebKitSmokeTests: XCTestCase, WKNavigationDelegate, WKScriptMessageH
         XCTAssertEqual(webViews[0].frame.width, 1200)
         XCTAssertEqual(webViews[0].frame.height, 820 - 46)
         XCTAssertTrue(controller.requestPanel.isHidden)
-        XCTAssertTrue(controller.findField.isHidden)
+        XCTAssertTrue(controller.findBar.isHidden)
         XCTAssertTrue(descendants(of: controller.view).compactMap { $0 as? NSTextField }.allSatisfy { !$0.isEditable || $0.isHiddenOrHasHiddenAncestor })
     }
 

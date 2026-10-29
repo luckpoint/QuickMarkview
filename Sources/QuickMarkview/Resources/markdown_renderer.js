@@ -459,6 +459,27 @@
     return true;
   }
 
+  // Mirrors WKWebView.find: case-insensitive, document order, skipping hidden and non-rendered text.
+  function findStatus(query) {
+    const needle = String(query).toLowerCase().replace(/\s/g, " ");
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
+      acceptNode: node => node.parentElement.closest("style, script, [hidden]") ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT
+    });
+    const selection = window.getSelection(), range = selection.rangeCount ? selection.getRangeAt(0) : null;
+    let text = "", caret = -1;
+    for (let node; (node = walker.nextNode());) {
+      if (range && node === range.startContainer) caret = text.length + range.startOffset;
+      text += node.data;
+    }
+    text = text.toLowerCase().replace(/\s/g, " ");
+    let index = 0, total = 0;
+    for (let at = needle ? text.indexOf(needle) : -1; at >= 0; at = text.indexOf(needle, at + needle.length)) {
+      total++;
+      if (at === caret) index = total;
+    }
+    return {index, total};
+  }
+
   function visibleLine() {
     const visible = Array.from(document.querySelectorAll("[data-source-start]"))
       .filter(node => node.getBoundingClientRect().bottom >= 0)
@@ -668,6 +689,7 @@
       drawCursor();
     },
     visibleLine: visibleLine,
+    findStatus: findStatus,
     selectedText: sendSelection,
     finishEdit: finishEdit,
     cancelEdit: function () { if (editState) closeEditor(true); }
