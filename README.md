@@ -70,7 +70,7 @@ gg G        Document start / end.
 <C-f> <C-b> Scroll half a page down / up; the cursor moves with it.
 v           Toggle visual selection; motions extend it. Esc leaves it.
 V           Toggle linewise visual selection over whole rendered lines.
-<Space>aa   Open the request panel for the current selection.
+<Space>aa   Open the request panel for the current selection (or the cursor line).
 <C-]>       Open the local link under the cursor; clicking a local link also follows it.
 <C-^>       Switch to the alternate file (press again to switch back).
 <C-Left>    Open the previous Markdown file.

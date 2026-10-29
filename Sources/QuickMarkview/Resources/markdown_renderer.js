@@ -570,7 +570,10 @@
     v: () => { if (mode === "v") leaveVisual(); else mode = "v"; },
     V: () => { if (mode === "V") leaveVisual(); else enterLineVisual(); },
     [ESC]: leaveVisual,
-    " aa": () => post({type: "requestInput"})
+    " aa": () => {
+      if (!mode && window.getSelection().isCollapsed) { enterLineVisual(); sendSelection(); }
+      post({type: "requestInput"});
+    }
   };
   const isPrefix = keys => Object.keys(bindings).some(sequence => sequence.startsWith(keys));
 

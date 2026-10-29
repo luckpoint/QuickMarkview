@@ -109,6 +109,16 @@ final class VimKeyTests: XCTestCase, WKNavigationDelegate, WKScriptMessageHandle
         XCTAssertEqual(js(view, "getSelection().focusNode.textContent"), "One")
     }
 
+    func testRequestWithoutSelectionSelectsCursorLine() {
+        let view = loadViewer("# One\n\nalpha beta\n\ngamma delta\n")
+        press(view, "j", "l", "l")
+        awaitMessage("requestInput") { press(view, " ", "a", "a") }
+        XCTAssertEqual(js(view, "getSelection().toString()"), "alpha beta")
+        XCTAssertEqual(lastSelection?["text"] as? String, "alpha beta")
+        XCTAssertEqual(lastSelection?["lineStart"] as? Int, 3)
+        XCTAssertEqual(lastSelection?["lineEnd"] as? Int, 3)
+    }
+
     func testLinewiseVisualStopsAtSoftWraps() {
         let paragraph = Array(repeating: "word", count: 200).joined(separator: " ")
         let view = loadViewer(paragraph + "\n")
