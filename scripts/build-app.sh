@@ -11,9 +11,10 @@ APP="$ROOT/dist/QuickMarkview.app"
 RESOURCE_DIR="$BUILD_DIR/QuickMarkview_QuickMarkview.bundle"
 
 rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources/bin"
 cp "$BUILD_DIR/QuickMarkview" "$APP/Contents/MacOS/QuickMarkview"
 cp -R "$RESOURCE_DIR" "$APP/Contents/Resources/"
+cp "$ROOT/scripts/qmv" "$APP/Contents/Resources/bin/qmv"
 cp "$ROOT/scripts/Info.plist" "$APP/Contents/Info.plist"
 
 echo "Built $APP"

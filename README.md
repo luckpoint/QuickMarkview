@@ -27,7 +27,13 @@ swift build -c release
 
 For a Finder-launchable application bundle, run `scripts/build-app.sh`; it creates `dist/QuickMarkview.app`. The bundle script copies the SwiftPM resource bundle beside the executable, so the app does not depend on the repository working directory.
 
-To install, run `scripts/install.sh`. It builds the bundle, moves it to `/Applications/QuickMarkview.app` (or `<dir>/QuickMarkview.app` with `scripts/install.sh <dir>`), and registers it with Launch Services so `open -a QuickMarkview` finds the installed copy. Run it again to update.
+To install, run `scripts/install.sh`. It builds the bundle, moves it to `/Applications/QuickMarkview.app` (or `<dir>/QuickMarkview.app` with `scripts/install.sh <dir>`), and registers it with Launch Services so `open -a QuickMarkview` finds the installed copy. It also links the `qmv` command into `~/.local/bin` (override with `QMV_BIN_DIR`). Run it again to update.
+
+`qmv` starts the bundled executable in the background, detached from the terminal, so relative paths and `WEZTERM_PANE` come from the calling shell:
+
+```sh
+qmv --line 42 note.md
+```
 
 The command line options are:
 
