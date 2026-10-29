@@ -8,7 +8,7 @@ The viewer loads the official `markdown-it@14.1.0` and `mermaid@11.12.1` distrib
 
 ## Demo
 
-https://github.com/user-attachments/assets/7da0fb62-7450-498b-a194-af7dd13b87ee
+https://github.com/user-attachments/assets/960e2115-46bd-4214-8ebe-11b780b14d8b
 
 Demo: Split WezTerm window with Neovim on the left and Claude Code on the right.
 1. Code Selection: The user visually selects a block of Swift code in Neovim.
