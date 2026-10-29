@@ -121,6 +121,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         appMenu.addItem(withTitle: "Quit QuickMarkview", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         appItem.submenu = appMenu; menu.addItem(appItem)
 
+        let fileItem = NSMenuItem(); let fileMenu = NSMenu(title: "File")
+        fileMenu.addItem(withTitle: "Open…", action: #selector(ViewerViewController.chooseFile(_:)), keyEquivalent: "o")
+        fileMenu.addItem(withTitle: "Open Recent…", action: #selector(ViewerViewController.toggleRecentFiles(_:)), keyEquivalent: "e")
+        fileItem.submenu = fileMenu; menu.addItem(fileItem)
+
         let editItem = NSMenuItem(); let editMenu = NSMenu(title: "Edit")
         editMenu.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
         editMenu.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
@@ -165,6 +170,8 @@ final class ViewerViewController: NSViewController, WKNavigationDelegate, WKScri
     private var isSending = false
     private var alternate: (url: URL, line: Int)?
     private var finderGeneration = 0
+    private var isShowingRecentFiles = false
+    private let recentFiles = RecentFiles()
     private var isNavigatingFile = false
     private var isEditingText = false
     private var isSavingTextEdit = false
@@ -305,6 +312,7 @@ final class ViewerViewController: NSViewController, WKNavigationDelegate, WKScri
             revision &+= 1
             document = MarkdownDocument(url: url, text: text, revision: revision)
             selection = nil
+            recentFiles.add(url)
             pathLabel.stringValue = url.path; lineLabel.stringValue = line.map { "line \($0)" } ?? ""
             statusLabel.stringValue = Self.idleStatus
             watcher?.stop(); watcher = FileWatcher(fileURL: url) { [weak self] in DispatchQueue.main.async { self?.reloadAfterExternalChange() } }; watcher?.start()
@@ -434,7 +442,7 @@ final class ViewerViewController: NSViewController, WKNavigationDelegate, WKScri
         queuedSource = nil
     }
 
-    @objc private func chooseFile(_ sender: Any?) {
+    @objc func chooseFile(_ sender: Any?) {
         let panel = NSOpenPanel(); panel.allowedContentTypes = [.text, .plainText, .sourceCode, .init(filenameExtension: "md")!, .init(filenameExtension: "markdown")!]; panel.allowsMultipleSelection = false
         if panel.runModal() == .OK, let url = panel.url { open(url: url, line: nil) }
     }
@@ -444,7 +452,7 @@ final class ViewerViewController: NSViewController, WKNavigationDelegate, WKScri
     @objc func toggleSidebar(_ sender: Any?) { webView.evaluateJavaScript("window.quickMarkview.toggleSidebar();", completionHandler: nil) }
 
     @objc func toggleFileFinder(_ sender: Any?) {
-        if !fileFinder.isHidden {
+        if !fileFinder.isHidden && !isShowingRecentFiles {
             hideFileFinder()
             return
         }
@@ -457,6 +465,7 @@ final class ViewerViewController: NSViewController, WKNavigationDelegate, WKScri
         let root = ProjectRoot.find(from: directory) ?? directory
         finderGeneration &+= 1
         let generation = finderGeneration
+        isShowingRecentFiles = false
         fileFinder.currentFileURL = document.url
         fileFinder.showIndexing(root: root)
         MarkdownFileIndex.list(root: root, runner: CommandRunner(timeout: 5)) { [weak self] paths in
@@ -466,6 +475,18 @@ final class ViewerViewController: NSViewController, WKNavigationDelegate, WKScri
                 self.fileFinder.focusSearchField()
             }
         }
+    }
+
+    @objc func toggleRecentFiles(_ sender: Any?) {
+        if !fileFinder.isHidden && isShowingRecentFiles {
+            hideFileFinder()
+            return
+        }
+        if !requestPanel.isHidden { hideRequestPanel() }
+        finderGeneration &+= 1
+        isShowingRecentFiles = true
+        fileFinder.currentFileURL = document?.url
+        fileFinder.showRecent(recentFiles.urls)
     }
 
     @objc func showFind(_ sender: Any?) {
@@ -520,8 +541,8 @@ final class ViewerViewController: NSViewController, WKNavigationDelegate, WKScri
     }
 
     private func chooseMarkdownFile(_ url: URL) {
-        guard let currentURL = document?.url else { hideFileFinder(); return }
         hideFileFinder()
+        guard let currentURL = document?.url else { open(url: url, line: nil); return }
         webView.evaluateJavaScript("window.quickMarkview.visibleLine();") { [weak self] value, _ in
             DispatchQueue.main.async {
                 guard let self else { return }

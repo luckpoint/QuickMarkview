@@ -11,7 +11,10 @@ final class FileFinderView: NSVisualEffectView, NSTableViewDataSource, NSTableVi
     private let countLabel = NSTextField(labelWithString: "")
     private let tableView = NSTableView()
     private let scrollView = NSScrollView()
-    private var rootURL: URL?
+    private var title = ""
+    private var emptyMessage = ""
+    private var excludedPath: String?
+    private var resolve: (String) -> URL = { URL(fileURLWithPath: $0) }
     private var paths: [String] = []
     private var results: [(path: String, positions: [Int], score: Int)] = []
     private var query = ""
@@ -24,12 +27,16 @@ final class FileFinderView: NSVisualEffectView, NSTableViewDataSource, NSTableVi
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    func show(root: URL, paths: [String]) {
-        rootURL = root.standardizedFileURL
-        self.paths = paths
+    func showRecent(_ urls: [URL]) {
+        let display = { (url: URL) in (url.path as NSString).abbreviatingWithTildeInPath }
+        title = "Recent Files"
+        emptyMessage = "No recent files"
+        excludedPath = currentFileURL.map(display)
+        resolve = { URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath).standardizedFileURL }
+        paths = urls.map(display)
         indexing = false
-        searchField.stringValue = ""
         query = ""
+        searchField.stringValue = ""
         isHidden = false
         filterResults()
         window?.makeFirstResponder(searchField)
@@ -38,7 +45,11 @@ final class FileFinderView: NSVisualEffectView, NSTableViewDataSource, NSTableVi
     func focusSearchField() { window?.makeFirstResponder(searchField) }
 
     func showIndexing(root: URL) {
-        rootURL = root.standardizedFileURL
+        let root = root.standardizedFileURL
+        title = root.path
+        emptyMessage = "No Markdown files under \(root.path)"
+        excludedPath = currentFileURL.map { String($0.standardizedFileURL.path.dropFirst(root.path.count + 1)) }
+        resolve = { root.appendingPathComponent($0).standardizedFileURL }
         paths = []
         results = []
         indexing = true
@@ -47,7 +58,7 @@ final class FileFinderView: NSVisualEffectView, NSTableViewDataSource, NSTableVi
         isHidden = false
         countLabel.stringValue = "Indexing…"
         tableView.reloadData()
-        rootLabel.stringValue = rootURL?.path ?? ""
+        rootLabel.stringValue = title
         window?.makeFirstResponder(searchField)
     }
 
@@ -113,9 +124,7 @@ final class FileFinderView: NSVisualEffectView, NSTableViewDataSource, NSTableVi
     }
 
     private func filterResults() {
-        guard let rootURL else { return }
-        rootLabel.stringValue = rootURL.path
-        let excludedPath = currentFileURL.map { String($0.standardizedFileURL.path.dropFirst(rootURL.path.count + 1)) }
+        rootLabel.stringValue = title
         if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             results = paths.filter { $0 != excludedPath }.map { ($0, [], 0) }
         } else {
@@ -157,7 +166,7 @@ final class FileFinderView: NSVisualEffectView, NSTableViewDataSource, NSTableVi
             return view
         }()
         guard results.indices.contains(row) else {
-            cell.textField?.stringValue = indexing ? "Indexing…" : "No Markdown files under \(rootURL?.path ?? "")"
+            cell.textField?.stringValue = indexing ? "Indexing…" : emptyMessage
             cell.textField?.textColor = .secondaryLabelColor
             cell.textField?.font = .systemFont(ofSize: 12)
             return cell
@@ -211,7 +220,7 @@ final class FileFinderView: NSVisualEffectView, NSTableViewDataSource, NSTableVi
     }
 
     @objc private func chooseSelected(_ sender: Any?) {
-        guard results.indices.contains(tableView.selectedRow), let rootURL else { return }
-        onChoose?(rootURL.appendingPathComponent(results[tableView.selectedRow].path).standardizedFileURL)
+        guard results.indices.contains(tableView.selectedRow) else { return }
+        onChoose?(resolve(results[tableView.selectedRow].path))
     }
 }

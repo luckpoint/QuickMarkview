@@ -81,6 +81,18 @@ final class WebKitSmokeTests: XCTestCase, WKNavigationDelegate, WKScriptMessageH
         XCTAssertEqual(item?.action, #selector(ViewerViewController.showFind(_:)))
     }
 
+    func testCommandOOpensFile() {
+        let item = AppDelegate.mainMenu().items.flatMap { $0.submenu?.items ?? [] }.first { $0.keyEquivalent == "o" }
+        XCTAssertEqual(item?.keyEquivalentModifierMask, .command)
+        XCTAssertEqual(item?.action, #selector(ViewerViewController.chooseFile(_:)))
+    }
+
+    func testCommandEOpensRecentFiles() {
+        let item = AppDelegate.mainMenu().items.flatMap { $0.submenu?.items ?? [] }.first { $0.keyEquivalent == "e" }
+        XCTAssertEqual(item?.keyEquivalentModifierMask, .command)
+        XCTAssertEqual(item?.action, #selector(ViewerViewController.toggleRecentFiles(_:)))
+    }
+
     func testFindSelectsMatchesForwardAndBackward() throws {
         let root = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
