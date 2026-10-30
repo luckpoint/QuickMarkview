@@ -228,9 +228,19 @@ final class CoreTests: XCTestCase {
         XCTAssertEqual(options.line, 3); XCTAssertEqual(options.originPaneID, 0); XCTAssertEqual(options.targetPaneID, 2)
     }
 
-    func testLaunchOptionsAcceptResidentMode() throws {
-        XCTAssertTrue(try LaunchOptions(arguments: ["--resident"]).resident)
-        XCTAssertFalse(try LaunchOptions(arguments: []).resident)
+    func testLaunchOptionsAcceptLegacyResidentFlag() throws {
+        XCTAssertEqual(try LaunchOptions(arguments: ["--resident"]), try LaunchOptions(arguments: []))
+    }
+
+    func testLaunchRequestPreservesPathsAndPaneContext() throws {
+        let options = try LaunchOptions(arguments: ["--line", "42", "--pane", "0", "--target-pane", "12", "/tmp/日本 & #?% note.md"])
+        let request = try XCTUnwrap(options.openRequest)
+        XCTAssertEqual(request.fileURL.path, "/tmp/日本 & #?% note.md")
+        XCTAssertEqual(request.line, 42)
+        XCTAssertEqual(request.paneID, 0)
+        XCTAssertEqual(request.targetPaneID, 12)
+        XCTAssertEqual(OpenRequest.parse(url: request.url), request)
+        XCTAssertNil(try LaunchOptions(arguments: []).openRequest)
     }
 
     func testWatcherObservesInPlaceAndAtomicSaves() throws {

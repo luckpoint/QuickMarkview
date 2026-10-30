@@ -4,8 +4,4 @@ set -eu
 SELF=$(readlink -f -- "$0")
 BIN="$(cd -- "$(dirname -- "$SELF")/../../MacOS" && pwd)/QuickMarkview"
 
-case " $* " in
-  *" -h "* | *" --help "*) exec "$BIN" "$@" ;;
-esac
-
-nohup "$BIN" "$@" >/dev/null 2>&1 &
+exec "$BIN" --launch "$@"

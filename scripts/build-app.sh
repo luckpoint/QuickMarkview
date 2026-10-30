@@ -17,4 +17,7 @@ cp -R "$RESOURCE_DIR" "$APP/Contents/Resources/"
 cp "$ROOT/scripts/qmv" "$APP/Contents/Resources/bin/qmv"
 cp "$ROOT/scripts/Info.plist" "$APP/Contents/Info.plist"
 
+# Bind the executable and bundled resources so Launch Services accepts the app.
+codesign --force --sign - "$APP"
+
 echo "Built $APP"

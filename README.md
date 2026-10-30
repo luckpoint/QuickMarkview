@@ -29,7 +29,7 @@ For a Finder-launchable application bundle, run `scripts/build-app.sh`; it creat
 
 To install, run `scripts/install.sh`. It builds the bundle, moves it to `/Applications/QuickMarkview.app` (or `<dir>/QuickMarkview.app` with `scripts/install.sh <dir>`), and registers it with Launch Services so `open -a QuickMarkview` finds the installed copy. It also links the `qmv` command into `~/.local/bin` (override with `QMV_BIN_DIR`). Run it again to update.
 
-`qmv` starts the bundled executable in the background, detached from the terminal, so relative paths and `WEZTERM_PANE` come from the calling shell:
+`qmv` opens files in the running app, starting it if needed. Relative paths and `WEZTERM_PANE` come from the calling shell:
 
 ```sh
 qmv --line 42 note.md
@@ -41,7 +41,6 @@ The command line options are:
 --line N          Scroll to one-based source line N.
 --pane ID         Originating Neovim/WezTerm pane. Defaults to WEZTERM_PANE.
 --target-pane ID  Explicit target when the tab has two coding-agent panes.
---resident        Keep the app running when the viewer is closed or q is pressed.
 path              Markdown file to open. With no path, the Open button is shown.
 ```
 
@@ -56,9 +55,9 @@ local quickmarkview = require("quickmarkview")
 vim.keymap.set("n", "<leader>am", quickmarkview.open, { desc = "Open Markdown in QuickMarkview" })
 ```
 
-The example passes the current buffer, cursor line, and `WEZTERM_PANE` explicitly. By default it uses `open -n -a` to launch a fresh app instance. Set `quickmarkview.resident = true` to keep one app process and send each file through the `quickmarkview://` URL scheme. Set `quickmarkview.app` to an absolute app path if the bundle is not installed in `/Applications`.
+The example passes the current buffer, cursor line, and `WEZTERM_PANE` through the `quickmarkview://` URL scheme and reuses the running app and its window. No resident-mode setting is needed; the old `--resident` flag is still accepted for compatibility. Set `quickmarkview.app` to an absolute app path if the bundle is not installed in `/Applications`.
 
-The window opens over the left two thirds of the screen at full height. Press `q` in the viewer to close it. In resident mode, `q` and the close button hide the window; click its Dock icon to show it again. ⌘Q always quits. `q` is typed normally while the request panel has focus. The table-of-contents sidebar starts hidden; press ⌘L (View › Toggle Sidebar) to show or hide it. Press ⌘K (View › Go to Markdown File…) to find and open a Markdown file in the project. Press ⌘O (File › Open…) to pick any file, or ⌘E (File › Open Recent…) to fuzzy-search the last 50 opened files; the current file is left out, so ⌘E then Enter returns to the previous one. Press ⌘F (Edit › Find…) to search the page: Enter jumps to the next match, Shift+Enter to the previous one, and Esc closes the find bar with the cursor left on the match. The bar shows the match count (`2/5`), counted case-insensitively over visible text.
+The window opens over the left two thirds of the screen at full height. `q` and the close button hide the window; click its Dock icon or run `qmv` to show it again. ⌘Q quits. `q` is typed normally while the request panel has focus. The table-of-contents sidebar starts hidden; press ⌘L (View › Toggle Sidebar) to show or hide it. Press ⌘K (View › Go to Markdown File…) to find and open a Markdown file in the project. Press ⌘O (File › Open…) to pick any file, or ⌘E (File › Open Recent…) to fuzzy-search the last 50 opened files; the current file is left out, so ⌘E then Enter returns to the previous one. Press ⌘F (Edit › Find…) to search the page: Enter jumps to the next match, Shift+Enter to the previous one, and Esc closes the find bar with the cursor left on the match. The bar shows the match count (`2/5`), counted case-insensitively over visible text.
 
 ## Selection and sending
 

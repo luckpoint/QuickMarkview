@@ -64,9 +64,14 @@ final class WebKitSmokeTests: XCTestCase, WKNavigationDelegate, WKScriptMessageH
         XCTAssertFalse(controller.handleFileNavigationKey(event))
     }
 
-    func testQuitActionHidesOnlyInResidentMode() {
-        XCTAssertEqual(AppDelegate.quitAction(resident: true), .hide)
-        XCTAssertEqual(AppDelegate.quitAction(resident: false), .terminate)
+    func testClosingWindowHidesItWithoutClosing() throws {
+        let delegate = AppDelegate(options: try LaunchOptions(arguments: []))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 100, height: 100),
+            styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        window.orderFront(nil)
+        XCTAssertTrue(window.isVisible)
+        XCTAssertFalse(delegate.windowShouldClose(window))
+        XCTAssertFalse(window.isVisible)
     }
 
     func testCommandLTogglesSidebar() {

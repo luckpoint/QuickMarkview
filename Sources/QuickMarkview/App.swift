@@ -6,18 +6,39 @@ import WebKit
 @main
 @MainActor
 struct QuickMarkviewMain {
-    static func main() {
+    static func main() async {
         do {
             let options = try LaunchOptions()
             if options.showHelp { print(quickMarkviewUsage); return }
-            let application = NSApplication.shared
-            application.setActivationPolicy(.regular)
-            let delegate = AppDelegate(options: options)
-            application.delegate = delegate
-            withExtendedLifetime(delegate) { application.run() }
+            let alreadyRunning = Bundle.main.bundleIdentifier.map { identifier in
+                NSRunningApplication.runningApplications(withBundleIdentifier: identifier)
+                    .contains(where: { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier && $0.activationPolicy == .regular })
+            } ?? false
+            if options.launchThroughWorkspace || alreadyRunning {
+                let configuration = NSWorkspace.OpenConfiguration()
+                configuration.environment = ProcessInfo.processInfo.environment
+                if let request = options.openRequest {
+                    _ = try await NSWorkspace.shared.open([request.url], withApplicationAt: Bundle.main.bundleURL, configuration: configuration)
+                } else {
+                    if let pane = options.originPaneID { configuration.arguments += ["--pane", String(pane)] }
+                    if let target = options.targetPaneID { configuration.arguments += ["--target-pane", String(target)] }
+                    _ = try await NSWorkspace.shared.openApplication(at: Bundle.main.bundleURL, configuration: configuration)
+                }
+                return
+            }
+            runApplication(options: options)
         } catch {
             FileHandle.standardError.write(Data("QuickMarkview: \(error.localizedDescription)\n".utf8))
+            exit(EXIT_FAILURE)
         }
+    }
+
+    private static func runApplication(options: LaunchOptions) {
+        let application = NSApplication.shared
+        application.setActivationPolicy(.regular)
+        let delegate = AppDelegate(options: options)
+        application.delegate = delegate
+        withExtendedLifetime(delegate) { application.run() }
     }
 }
 
@@ -54,10 +75,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             if self.controller.handleFileNavigationKey(event) { return nil }
             if self.controller?.isTextEditActive == true { return event }
             guard Self.closesViewer(characters: event.characters, firstResponder: window.firstResponder) else { return event }
-            switch Self.quitAction(resident: self.options.resident) {
-            case .hide: window.orderOut(nil)
-            case .terminate: NSApp.terminate(nil)
-            }
+            window.orderOut(nil)
             return nil
         }
         if let pendingOpenRequest { self.pendingOpenRequest = nil; receive(pendingOpenRequest) }
@@ -94,14 +112,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
-        guard options.resident else { return true }
         sender.orderOut(nil)
         return false
     }
-
-    enum QuitAction: Equatable { case hide, terminate }
-
-    static func quitAction(resident: Bool) -> QuitAction { resident ? .hide : .terminate }
 
     static func closesViewer(characters: String?, firstResponder: NSResponder?) -> Bool {
         characters == "q" && !(firstResponder is NSText)
@@ -230,7 +243,6 @@ final class ViewerViewController: NSViewController, WKNavigationDelegate, WKScri
     override func viewDidAppear() {
         super.viewDidAppear()
         if let url = options.fileURL { open(url: url, line: options.line) }
-        else if options.showHelp == false && !options.resident && document == nil { chooseFile(nil) }
         view.window?.makeFirstResponder(webView)
         refreshTargets()
     }
@@ -376,7 +388,7 @@ final class ViewerViewController: NSViewController, WKNavigationDelegate, WKScri
 
     func receive(_ request: OpenRequest) {
         originPaneID = request.paneID
-        explicitTargetID = nil
+        explicitTargetID = request.targetPaneID
         alternate = nil
         hideRequestPanel()
         _ = open(url: request.fileURL, line: request.line)

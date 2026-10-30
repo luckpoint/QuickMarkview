@@ -5,8 +5,9 @@ public struct LaunchOptions: Equatable, Sendable {
     public var line: Int?
     public var originPaneID: Int?
     public var targetPaneID: Int?
-    public var resident = false
     public var showHelp = false
+    // Used by the bundled qmv launcher to let Launch Services serialize app launches.
+    var launchThroughWorkspace = false
 
     public init(arguments: [String] = Array(CommandLine.arguments.dropFirst())) throws {
         var index = 0
@@ -14,7 +15,8 @@ public struct LaunchOptions: Equatable, Sendable {
             let argument = arguments[index]
             switch argument {
             case "-h", "--help": showHelp = true
-            case "--resident": resident = true
+            case "--launch": launchThroughWorkspace = true
+            case "--resident": break // Accepted for compatibility; the app always stays running.
             case "--line":
                 index += 1; line = try Self.integer(arguments, index, option: "--line")
             case "--pane":
@@ -36,6 +38,12 @@ public struct LaunchOptions: Equatable, Sendable {
             index += 1
         }
         if let line { self.line = max(1, line) }
+    }
+
+    public var openRequest: OpenRequest? {
+        fileURL.map { OpenRequest(fileURL: $0, line: line,
+            paneID: originPaneID ?? ProcessInfo.processInfo.environment["WEZTERM_PANE"].flatMap(Int.init),
+            targetPaneID: targetPaneID) }
     }
 
     private static func integer(_ arguments: [String], _ index: Int, option: String) throws -> Int {
@@ -84,5 +92,6 @@ Usage:
 --line N          Scroll to a one-based source line after rendering.
 --pane ID         Originating Neovim/WezTerm pane. Defaults to WEZTERM_PANE.
 --target-pane ID  Explicit coding-agent pane when the tab has two targets.
---resident        Keep the app running when the viewer is closed or q is pressed.
+
+Reuses the running app. Closing the viewer or pressing q hides it; Cmd+Q quits.
 """

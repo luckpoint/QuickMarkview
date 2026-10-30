@@ -109,11 +109,24 @@ public struct OpenRequest: Equatable, Sendable {
     public let fileURL: URL
     public let line: Int?
     public let paneID: Int?
+    public let targetPaneID: Int?
 
-    public init(fileURL: URL, line: Int? = nil, paneID: Int? = nil) {
+    public init(fileURL: URL, line: Int? = nil, paneID: Int? = nil, targetPaneID: Int? = nil) {
         self.fileURL = fileURL.standardizedFileURL
         self.line = line.map { max(1, $0) }
         self.paneID = paneID
+        self.targetPaneID = targetPaneID
+    }
+
+    public var url: URL {
+        var components = URLComponents()
+        components.scheme = "quickmarkview"
+        components.host = "open"
+        components.queryItems = [URLQueryItem(name: "path", value: fileURL.path)]
+        for (name, value) in [("line", line), ("pane", paneID), ("target-pane", targetPaneID)] {
+            if let value { components.queryItems?.append(URLQueryItem(name: name, value: String(value))) }
+        }
+        return components.url!
     }
 
     public static func parse(url: URL) -> OpenRequest? {
@@ -124,7 +137,8 @@ public struct OpenRequest: Equatable, Sendable {
         let fileURL = URL(fileURLWithPath: path).standardizedFileURL
         let line = components.queryItems?.first(where: { $0.name == "line" })?.value.flatMap(Int.init).flatMap { $0 > 0 ? $0 : nil }
         let paneID = components.queryItems?.first(where: { $0.name == "pane" })?.value.flatMap(Int.init).flatMap { $0 >= 0 ? $0 : nil }
-        return OpenRequest(fileURL: fileURL, line: line, paneID: paneID)
+        let targetPaneID = components.queryItems?.first(where: { $0.name == "target-pane" })?.value.flatMap(Int.init).flatMap { $0 >= 0 ? $0 : nil }
+        return OpenRequest(fileURL: fileURL, line: line, paneID: paneID, targetPaneID: targetPaneID)
     }
 }
 
