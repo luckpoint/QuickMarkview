@@ -57,7 +57,7 @@
         const chunks = part.split("\n");
         output += chunks[0];
         for (let index = 1; index < chunks.length; index++) {
-          output += closeTags() + "</span>\n";
+          output += closeTags() + "\n</span>";
           line++;
           output += `<span class="line" data-source-start="${line}" data-source-end="${line}">` + openTags() + chunks[index];
         }

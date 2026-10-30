@@ -293,8 +293,10 @@ final class VimKeyTests: XCTestCase, WKNavigationDelegate, WKScriptMessageHandle
 
     func testCodeLinewiseSelectionReportsOriginalSourceLine() {
         let view = loadViewer("placeholder\n")
-        _ = js(view, "window.quickMarkview.setDocument('let a = 1\\nlet b = 2\\nlet c = 3', null, 2, 'swift'); getSelection().collapse(document.querySelector('.line .hljs-keyword').firstChild, 0); ''")
-        press(view, "j", "V")
+        _ = js(view, "window.quickMarkview.setDocument('let a = 1\\nlet b = 2\\nlet c = 3', null, 2, 'swift'); ''")
+        settleRender(view)
+        _ = js(view, "getSelection().collapse(document.querySelector('.line .hljs-keyword').firstChild, 0); ''")
+        awaitMessage("selection") { press(view, "j", "V") }
         XCTAssertEqual(lastSelection?["lineStart"] as? Int, 2)
         XCTAssertEqual(lastSelection?["lineEnd"] as? Int, 2)
     }
