@@ -226,41 +226,49 @@ final class VimKeyTests: XCTestCase, WKNavigationDelegate, WKScriptMessageHandle
         XCTAssertEqual(js(view, "String(document.dispatchEvent(new KeyboardEvent('keydown', {key: 'f', ctrlKey: true, cancelable: true})))"), "false")
     }
 
-    func testTableArrowsMoveBetweenRowsInTheSameColumn() {
-        let view = loadViewer("| Left | Right |\n| --- | --- |\n| alpha | one |\n| gamma | three |\n")
-        _ = js(view, "getSelection().collapse(document.querySelectorAll('th')[1].firstChild, 0); ''")
-        press(view, "ArrowDown")
-        XCTAssertEqual(js(view, "getSelection().focusNode.textContent"), "one")
-        press(view, "ArrowDown")
-        XCTAssertEqual(js(view, "getSelection().focusNode.textContent"), "three")
-        press(view, "ArrowDown")
-        XCTAssertEqual(js(view, "getSelection().focusNode.textContent"), "three")
-        press(view, "ArrowUp")
-        XCTAssertEqual(js(view, "getSelection().focusNode.textContent"), "one")
-        press(view, "ArrowUp", "ArrowUp")
-        XCTAssertEqual(js(view, "getSelection().focusNode.textContent"), "Right")
+    func testTableKeysMoveBetweenRowsInTheSameColumn() {
+        for (down, up) in [("j", "k"), ("ArrowDown", "ArrowUp")] {
+            let view = loadViewer("before\n\n| Left | Right |\n| --- | --- |\n| alpha | one |\n| gamma | three |\n\nafter\n")
+            _ = js(view, "getSelection().collapse(document.querySelectorAll('th')[1].firstChild, 0); ''")
+            _ = js(view, "document.querySelectorAll('td')[1].innerHTML = 'one<br>two'; ''")
+            press(view, down)
+            XCTAssertEqual(js(view, "getSelection().focusNode.textContent"), "one")
+            press(view, down)
+            XCTAssertEqual(js(view, "getSelection().focusNode.textContent"), "three")
+            press(view, down)
+            XCTAssertEqual(js(view, "getSelection().focusNode.textContent"), down == "j" ? "after" : "three")
+            _ = js(view, "getSelection().collapse(document.querySelectorAll('td')[3].firstChild, 0); ''")
+            press(view, up)
+            XCTAssertEqual(js(view, "getSelection().focusNode.textContent"), "one")
+            press(view, up)
+            XCTAssertEqual(js(view, "getSelection().focusNode.textContent"), "Right")
+            press(view, up)
+            XCTAssertEqual(js(view, "getSelection().focusNode.textContent"), up == "k" ? "before" : "Right")
+        }
     }
 
-    func testShiftTableArrowsMoveWithinCellAndStopAtItsEdges() {
-        let view = loadViewer("before\n\n| Left | Right |\n| --- | --- |\n| alpha beta | one two |\n| gamma | three |\n\nafter\n")
-        // Give the rendered cell two deterministic display lines.
-        _ = js(view, "document.querySelector('td').innerHTML = 'alpha<br>beta'; getSelection().collapse(document.querySelector('td').firstChild, 0); ''")
-        press(view, "<S-ArrowDown>")
-        XCTAssertEqual(js(view, "getSelection().focusNode.textContent"), "beta")
-        XCTAssertEqual(js(view, "getSelection().isCollapsed"), "1")
-        press(view, "<S-ArrowDown>")
-        XCTAssertEqual(js(view, "getSelection().focusNode.textContent"), "beta")
-        press(view, "<S-ArrowUp>", "<S-ArrowUp>")
-        XCTAssertEqual(js(view, "getSelection().focusNode.textContent"), "alpha")
+    func testShiftTableKeysMoveWithinCellAndStopAtItsEdges() {
+        for (down, up) in [("<S-J>", "<S-K>"), ("<S-ArrowDown>", "<S-ArrowUp>")] {
+            let view = loadViewer("before\n\n| Left | Right |\n| --- | --- |\n| alpha beta | one two |\n| gamma | three |\n\nafter\n")
+            // Give the rendered cell two deterministic display lines.
+            _ = js(view, "document.querySelector('td').innerHTML = 'alpha<br>beta'; getSelection().collapse(document.querySelector('td').firstChild, 0); ''")
+            press(view, down)
+            XCTAssertEqual(js(view, "getSelection().focusNode.textContent"), "beta")
+            XCTAssertEqual(js(view, "getSelection().isCollapsed"), "1")
+            press(view, down)
+            XCTAssertEqual(js(view, "getSelection().focusNode.textContent"), "beta")
+            press(view, up, up)
+            XCTAssertEqual(js(view, "getSelection().focusNode.textContent"), "alpha")
 
-        press(view, "v", "<S-ArrowDown>")
-        XCTAssertEqual(js(view, "getSelection().focusNode.textContent"), "beta")
-        XCTAssertEqual(js(view, "getSelection().isCollapsed"), "0")
-        let selected = js(view, "getSelection().toString()")
-        press(view, "<S-ArrowDown>")
-        XCTAssertEqual(js(view, "getSelection().toString()"), selected)
-        press(view, "Escape", "ArrowDown")
-        XCTAssertEqual(js(view, "getSelection().focusNode.textContent"), "gamma")
+            press(view, "v", down)
+            XCTAssertEqual(js(view, "getSelection().focusNode.textContent"), "beta")
+            XCTAssertEqual(js(view, "getSelection().isCollapsed"), "0")
+            let selected = js(view, "getSelection().toString()")
+            press(view, down)
+            XCTAssertEqual(js(view, "getSelection().toString()"), selected)
+            press(view, "Escape", "ArrowDown")
+            XCTAssertEqual(js(view, "getSelection().focusNode.textContent"), "gamma")
+        }
     }
 
     func testArrowsOutsideTableKeepNativeHandling() {

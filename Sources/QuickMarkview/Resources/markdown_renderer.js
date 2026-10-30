@@ -220,11 +220,25 @@
     cell.scrollIntoView({block: "nearest", inline: "nearest"});
   }
 
-  function rowStep(step) {
+  function rowStep(step, exitTable = false) {
     const cell = cellAtCursor();
     if (!cell) return;
     const table = cell.closest("table"), row = table.rows[cell.parentElement.rowIndex + step];
     if (row && row.cells.length) moveToCell(row.cells[Math.min(cell.cellIndex, row.cells.length - 1)]);
+    else if (exitTable) {
+      move((selection, alter) => {
+        const origin = caret();
+        while (table.contains(selection.focusNode)) {
+          const previous = caret();
+          selection.modify(alter, step > 0 ? "forward" : "backward", "line");
+          if (selection.focusNode === previous[0] && selection.focusOffset === previous[1]) {
+            if (alter === "extend") selection.extend(...origin);
+            else selection.collapse(...origin);
+            break;
+          }
+        }
+      });
+    }
   }
 
   function nextCell() {
@@ -552,11 +566,11 @@
 
   const bindings = {
     h: () => motion("backward", "character"),
-    j: () => motion("forward", "line"),
-    k: () => motion("backward", "line"),
+    j: () => cellAtCursor() ? rowStep(1, true) : motion("forward", "line"),
+    k: () => cellAtCursor() ? rowStep(-1, true) : motion("backward", "line"),
     l: () => motion("forward", "character"),
-    J: () => rowStep(1),
-    K: () => rowStep(-1),
+    J: () => { const cell = cellAtCursor(); if (cell) cellLineStep(cell, "forward"); },
+    K: () => { const cell = cellAtCursor(); if (cell) cellLineStep(cell, "backward"); },
     [TAB]: nextCell,
     "0": () => motion("backward", "lineboundary"),
     $: () => motion("forward", "lineboundary"),

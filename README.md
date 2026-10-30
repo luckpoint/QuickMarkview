@@ -67,7 +67,8 @@ The viewer has a Vim-style cursor:
 ```text
 h j k l     Move by character / line.
 e           Edit the Markdown source of the paragraph, heading, list item, or table cell under the cursor; Enter saves, Shift+Enter adds a line (paragraphs), Esc cancels.
-J K         Move to the same column in the next / previous table row.
+j k         Move to the same column in the next / previous table row; leave the table at its bottom / top edge.
+J K         Move by rendered line within the current table cell.
 ↓ ↑         Move to the same column in the next / previous table row.
 Shift+↓/↑   Move by rendered line within the current table cell.
 <Tab>       Move to the next table cell.
