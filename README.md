@@ -77,7 +77,10 @@ gg G        Document start / end.
 <C-f> <C-b> Scroll half a page down / up; the cursor moves with it.
 v           Toggle visual selection; motions extend it. Esc leaves it.
 V           Toggle linewise visual selection over whole rendered lines.
-<Space>aa   Open the request panel for the current selection (or the cursor line).
+<Space>aa   Open the request panel for the stash plus the current selection (or the cursor line).
+<Space>ay   Stash the current selection (or the cursor line) to send later with others.
+<Space>ax   Remove stashed selections overlapping the cursor block or selection.
+<Space>a<Esc> Clear the stash.
 <C-]>       Open the local link under the cursor; clicking a local link also follows it.
 <C-^>       Switch to the alternate file (press again to switch back).
 <C-Left>    Open the previous Markdown file.
@@ -85,6 +88,8 @@ V           Toggle linewise visual selection over whole rendered lines.
 ```
 
 Ctrl+Left/Right follows filename order within the current folder, skipping hidden items and non-Markdown files. At the folder's edge it searches the previous/next sibling folders, including their descendants in directory-first order. Empty folders are skipped; navigation stops when no candidate remains. This follows `file_navigation.lua` and does not ascend to higher ancestors. Ctrl+^ returns to the file you just left.
+
+Stashed selections may come from several files; each stashed block gets an accent bar and the status bar shows the count (`📎 2`). The stash lives in memory until it is sent or cleared. When a file changes, each stashed range follows its lines through a line diff, or through the only exact copy of those lines if the block moved; a range whose own lines changed is dropped with a notice. With two or more selections the prompt tags each one as `<selection file="…" lines="a-b">`. If a stashed file changes after the panel opens, Shift+Enter rebuilds the prompt around the typed request instead of sending, so review it and press Shift+Enter again.
 
 Dragging with the mouse also selects. The viewer reports the nearest Markdown block source range and the selected rendered text. The request panel is a native text view prefilled with the full prompt in the same shape as the existing Neovim integration: source file, line range, an empty `Request:` section where the cursor starts, and the `<selection>` tags. Edit any part of it, then press Shift+Enter to send exactly that text, or Esc to cancel. Start the first line with `/btw` for a side chat request (supported by both Codex and Claude Code). A file reload clears the selection, and a revision check prevents a stale WebKit selection from being sent after a reload.
 
