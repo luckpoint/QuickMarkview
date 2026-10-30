@@ -156,9 +156,13 @@ public struct MarkdownDocument: Equatable, Sendable {
     }
 
     public func text(in range: SourceRange) -> String {
+        lines(in: range).joined(separator: "\n")
+    }
+
+    public func lines(in range: SourceRange) -> [String] {
         let first = max(1, min(range.startLine, lines.count)) - 1
         let last = max(first, min(range.endLine, lines.count) - 1)
-        return lines[first...last].joined(separator: "\n")
+        return Array(lines[first...last])
     }
 }
 
@@ -178,17 +182,153 @@ public struct RenderedSelection: Equatable, Sendable {
     }
 }
 
+/// A stashed selection. `sourceLines` is the Markdown source of `range` when
+/// it was stashed; a later file version keeps the item only if those lines survive.
+public struct ContextItem: Equatable, Sendable {
+    public let url: URL
+    public var range: SourceRange
+    public let text: String
+    public let sourceLines: [String]
+
+    public init(url: URL, range: SourceRange, text: String, sourceLines: [String]) {
+        self.url = url
+        self.range = range
+        self.text = text
+        self.sourceLines = sourceLines
+    }
+
+    public init(document: MarkdownDocument, range: SourceRange, text: String) {
+        self.init(url: document.url, range: range, text: text, sourceLines: document.lines(in: range))
+    }
+
+    public var content: String { text.isEmpty ? sourceLines.joined(separator: "\n") : text }
+
+    public func matches(_ lines: [String]) -> Bool {
+        range.endLine <= lines.count && Array(lines[(range.startLine - 1)..<range.endLine]) == sourceLines
+    }
+
+    /// Follows the range through a line diff; falls back to the only exact
+    /// occurrence of `sourceLines`, so a moved block is still found.
+    func reanchored(map: [Int?], lines: [String]) -> ContextItem? {
+        let first = range.startLine - 1, last = range.endLine - 1
+        var moved = self
+        if last < map.count, (first...last).allSatisfy({ map[$0] != nil }), let start = map[first], let end = map[last], end - start == last - first {
+            moved.range = SourceRange(startLine: start + 1, endLine: end + 1)
+            return moved
+        }
+        let count = sourceLines.count
+        guard lines.count >= count else { return nil }
+        let hits = (0...(lines.count - count)).filter { Array(lines[$0..<($0 + count)]) == sourceLines }
+        guard hits.count == 1 else { return nil }
+        moved.range = SourceRange(startLine: hits[0] + 1, endLine: hits[0] + count)
+        return moved
+    }
+}
+
+public struct ContextBasket: Equatable, Sendable {
+    public private(set) var items: [ContextItem] = []
+    private var snapshots: [URL: [String]] = [:]
+
+    public init() {}
+
+    /// `fileLines` must be the file version `item` was taken from.
+    @discardableResult
+    public mutating func add(_ item: ContextItem, fileLines: [String]) -> Bool {
+        guard !items.contains(where: { $0.url == item.url && $0.range == item.range }) else { return false }
+        items.append(item)
+        snapshots[item.url] = fileLines
+        return true
+    }
+
+    @discardableResult
+    public mutating func remove(url: URL, overlapping range: SourceRange) -> Int {
+        let before = items.count
+        items.removeAll { $0.url == url && $0.range.startLine <= range.endLine && $0.range.endLine >= range.startLine }
+        return before - items.count
+    }
+
+    public mutating func clear() {
+        items = []
+        snapshots = [:]
+    }
+
+    /// Moves `url`'s items to the new file version and returns how many were dropped.
+    @discardableResult
+    public mutating func reanchor(url: URL, lines: [String]) -> Int {
+        guard let old = snapshots[url], old != lines else { return 0 }
+        let map = Self.lineMap(from: old, to: lines)
+        let before = items.count
+        items = items.compactMap { $0.url == url ? $0.reanchored(map: map, lines: lines) : $0 }
+        snapshots[url] = lines
+        return before - items.count
+    }
+
+    public func ranges(in url: URL) -> [SourceRange] {
+        items.filter { $0.url == url }.map(\.range)
+    }
+
+    static func lineMap(from old: [String], to new: [String]) -> [Int?] {
+        var removed = Set<Int>(), inserted = Set<Int>()
+        for change in new.difference(from: old) {
+            switch change {
+            case .remove(let offset, _, _): removed.insert(offset)
+            case .insert(let offset, _, _): inserted.insert(offset)
+            }
+        }
+        var map = [Int?](repeating: nil, count: old.count), next = 0
+        for index in old.indices where !removed.contains(index) {
+            while inserted.contains(next) { next += 1 }
+            map[index] = next
+            next += 1
+        }
+        return map
+    }
+}
+
 public enum PromptBuilder {
     public static func build(context: MarkdownDocument, range: SourceRange, request: String, selectedText: String? = nil) -> String {
-        let trimmed = request.trimmingCharacters(in: .whitespacesAndNewlines)
         let content = selectedText?.isEmpty == false ? selectedText! : context.text(in: range)
+        return build(url: context.url, range: range, request: request, content: content)
+    }
+
+    public static func build(items: [ContextItem], request: String) -> String {
+        if items.count == 1, let item = items.first {
+            return build(url: item.url, range: item.range, request: request, content: item.content)
+        }
+        let blocks = items.map {
+            "<selection file=\"\($0.url.path)\" lines=\"\($0.range.startLine)-\($0.range.endLine)\">\n\($0.content)\n</selection>"
+        }.joined(separator: "\n\n")
+        if let sideChat = sideChatRequest(request.trimmingCharacters(in: .whitespacesAndNewlines)) {
+            return [sideChat.isEmpty ? "/btw" : "/btw \(sideChat)", "", "Context:", blocks].joined(separator: "\n")
+        }
+        return [
+            "Please handle the following request using the selected context.",
+            "",
+            "Request:",
+            request,
+            "",
+            "Selected content:",
+            blocks
+        ].joined(separator: "\n")
+    }
+
+    /// The request typed into a prompt made by `build`, or nil once its layout was edited away.
+    public static func request(in prompt: String) -> String? {
+        if prompt.hasPrefix("/btw"), let end = prompt.range(of: "\n\nContext:\n") { return String(prompt[..<end.lowerBound]) }
+        guard let start = prompt.range(of: "Request:\n"),
+              let end = prompt.range(of: "\n\nSelected content:\n", range: start.upperBound..<prompt.endIndex) else { return nil }
+        return String(prompt[start.upperBound..<end.lowerBound])
+    }
+
+    private static func build(url: URL, range: SourceRange, request: String, content: String) -> String {
+        let trimmed = request.trimmingCharacters(in: .whitespacesAndNewlines)
         if let sideChat = sideChatRequest(trimmed) {
             let command = sideChat.isEmpty ? "/btw" : "/btw \(sideChat)"
             return [
                 command,
                 "",
                 "Context:",
-                "File: \(context.url.path)",
+                "File: \(url.path)",
                 "Lines: \(range.startLine)-\(range.endLine)",
                 "",
                 "Selected content:",
@@ -201,7 +341,7 @@ public enum PromptBuilder {
         return [
             "Please handle the following request using the selected context.",
             "",
-            "File: \(context.url.path)",
+            "File: \(url.path)",
             "Lines: \(range.startLine)-\(range.endLine)",
             "",
             "Request:",

@@ -96,6 +96,110 @@ final class CoreTests: XCTestCase {
         XCTAssertTrue(prompt.hasPrefix("/btw explain\n\nContext:"))
     }
 
+    func testSingleItemPromptMatchesSelectionPrompt() {
+        let item = ContextItem(document: document, range: SourceRange(startLine: 2, endLine: 3), text: "")
+        XCTAssertEqual(PromptBuilder.build(items: [item], request: "Fix this"),
+                       PromptBuilder.build(context: document, range: SourceRange(startLine: 2, endLine: 3), request: "Fix this"))
+    }
+
+    func testMultiItemPromptTagsEachSelection() {
+        let other = MarkdownDocument(url: URL(fileURLWithPath: "/tmp/api.md"), text: "x\ny")
+        let items = [ContextItem(document: document, range: SourceRange(startLine: 2, endLine: 2), text: "alp"),
+                     ContextItem(document: other, range: SourceRange(startLine: 1, endLine: 2), text: "")]
+        XCTAssertEqual(PromptBuilder.build(items: items, request: "Compare"), """
+        Please handle the following request using the selected context.
+
+        Request:
+        Compare
+
+        Selected content:
+        <selection file="/tmp/notes.md" lines="2-2">
+        alp
+        </selection>
+
+        <selection file="/tmp/api.md" lines="1-2">
+        x
+        y
+        </selection>
+        """)
+        XCTAssertTrue(PromptBuilder.build(items: items, request: "/btw why").hasPrefix("/btw why\n\nContext:\n<selection file=\"/tmp/notes.md\""))
+    }
+
+    func testRequestRoundTripsThroughPrompts() {
+        let one = [ContextItem(document: document, range: SourceRange(startLine: 2, endLine: 3), text: "")]
+        let two = one + [ContextItem(document: document, range: SourceRange(startLine: 5, endLine: 5), text: "")]
+        for items in [one, two] {
+            for request in ["", "Fix\nthis", "/btw explain"] {
+                XCTAssertEqual(PromptBuilder.request(in: PromptBuilder.build(items: items, request: request)), request)
+            }
+        }
+        XCTAssertNil(PromptBuilder.request(in: "free text"))
+    }
+
+    func testBasketIgnoresDuplicatesAndRemovesOverlaps() {
+        var basket = ContextBasket()
+        let other = MarkdownDocument(url: URL(fileURLWithPath: "/tmp/api.md"), text: "x\ny")
+        XCTAssertTrue(basket.add(ContextItem(document: document, range: SourceRange(startLine: 2, endLine: 3), text: ""), fileLines: document.lines))
+        XCTAssertFalse(basket.add(ContextItem(document: document, range: SourceRange(startLine: 2, endLine: 3), text: "alpha"), fileLines: document.lines))
+        basket.add(ContextItem(document: document, range: SourceRange(startLine: 5, endLine: 6), text: ""), fileLines: document.lines)
+        basket.add(ContextItem(document: other, range: SourceRange(startLine: 1, endLine: 2), text: ""), fileLines: other.lines)
+        XCTAssertEqual(basket.remove(url: document.url, overlapping: SourceRange(startLine: 3, endLine: 3)), 1)
+        XCTAssertEqual(basket.ranges(in: document.url), [SourceRange(startLine: 5, endLine: 6)])
+        XCTAssertEqual(basket.ranges(in: other.url), [SourceRange(startLine: 1, endLine: 2)])
+        basket.clear()
+        XCTAssertTrue(basket.items.isEmpty)
+    }
+
+    private func basket(_ lines: [String], _ ranges: [(Int, Int)]) -> ContextBasket {
+        let file = MarkdownDocument(url: document.url, text: lines.joined(separator: "\n"))
+        var basket = ContextBasket()
+        for (start, end) in ranges { basket.add(ContextItem(document: file, range: SourceRange(startLine: start, endLine: end), text: ""), fileLines: file.lines) }
+        return basket
+    }
+
+    func testReanchorFollowsInsertionsAndDuplicates() {
+        var shifted = basket(["a", "b", "c"], [(2, 3)])
+        XCTAssertEqual(shifted.reanchor(url: document.url, lines: ["x", "y", "z", "a", "b", "c"]), 0)
+        XCTAssertEqual(shifted.ranges(in: document.url), [SourceRange(startLine: 5, endLine: 6)])
+
+        var duplicate = basket(["TODO", "a", "TODO"], [(3, 3)])
+        duplicate.reanchor(url: document.url, lines: ["new", "TODO", "a", "TODO"])
+        XCTAssertEqual(duplicate.ranges(in: document.url), [SourceRange(startLine: 4, endLine: 4)])
+    }
+
+    func testReanchorFindsMovedBlockOnlyWhenUnique() {
+        var moved = basket(["a", "b", "c", "d"], [(1, 2)])
+        moved.reanchor(url: document.url, lines: ["c", "d", "a", "b"])
+        XCTAssertEqual(moved.ranges(in: document.url), [SourceRange(startLine: 3, endLine: 4)])
+
+        let item = ContextItem(url: document.url, range: SourceRange(startLine: 1, endLine: 2), text: "", sourceLines: ["a", "b"])
+        XCTAssertEqual(item.reanchored(map: [nil, nil], lines: ["x", "a", "b"])?.range, SourceRange(startLine: 2, endLine: 3))
+        XCTAssertNil(item.reanchored(map: [nil, nil], lines: ["a", "b", "x", "a", "b"]))
+        XCTAssertNil(item.reanchored(map: [nil, nil], lines: ["a"]))
+    }
+
+    func testReanchorDropsEditedOrSplitRangesOnly() {
+        var edited = basket(["a", "b", "c", "d"], [(2, 3), (4, 4)])
+        XCTAssertEqual(edited.reanchor(url: document.url, lines: ["a", "B", "c", "d"]), 1)
+        XCTAssertEqual(edited.ranges(in: document.url), [SourceRange(startLine: 4, endLine: 4)])
+
+        var split = basket(["a", "b", "c"], [(1, 2)])
+        XCTAssertEqual(split.reanchor(url: document.url, lines: ["a", "new", "b", "c"]), 1)
+
+        var other = basket(["a"], [(1, 1)])
+        let api = MarkdownDocument(url: URL(fileURLWithPath: "/tmp/api.md"), text: "x")
+        other.add(ContextItem(document: api, range: SourceRange(startLine: 1, endLine: 1), text: ""), fileLines: api.lines)
+        XCTAssertEqual(other.reanchor(url: api.url, lines: ["changed"]), 1)
+        XCTAssertEqual(other.ranges(in: document.url), [SourceRange(startLine: 1, endLine: 1)])
+    }
+
+    func testItemMatchesOnlyUnchangedSourceLines() {
+        let item = ContextItem(document: document, range: SourceRange(startLine: 2, endLine: 3), text: "")
+        XCTAssertTrue(item.matches(document.lines))
+        XCTAssertFalse(item.matches(["# One", "alpha", "BETA"]))
+        XCTAssertFalse(item.matches(["# One", "alpha"]))
+    }
+
     func testPaneResolverIsSameTabAndLeftToRight() throws {
         let panes = [
             WezTermPane(paneID: 20, tabID: 1, leftCol: 80, topRow: 0, title: "agent-right"),
