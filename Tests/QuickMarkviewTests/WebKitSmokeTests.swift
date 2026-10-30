@@ -316,6 +316,10 @@ final class WebKitSmokeTests: XCTestCase, WKNavigationDelegate, WKScriptMessageH
         view.subviews + view.subviews.flatMap(descendants)
     }
 
+    func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction, decisionHandler: @escaping @MainActor @Sendable (WKNavigationActionPolicy) -> Void) {
+        decisionHandler(action.request.url?.isFileURL == true ? .allow : .cancel)
+    }
+
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         webView.evaluateJavaScript("typeof markdownit + ':' + typeof mermaid") { [weak self, weak webView] value, error in
             XCTAssertNil(error)
