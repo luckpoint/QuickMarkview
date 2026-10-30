@@ -193,13 +193,6 @@ final class CoreTests: XCTestCase {
         XCTAssertEqual(other.ranges(in: document.url), [SourceRange(startLine: 1, endLine: 1)])
     }
 
-    func testItemMatchesOnlyUnchangedSourceLines() {
-        let item = ContextItem(document: document, range: SourceRange(startLine: 2, endLine: 3), text: "")
-        XCTAssertTrue(item.matches(document.lines))
-        XCTAssertFalse(item.matches(["# One", "alpha", "BETA"]))
-        XCTAssertFalse(item.matches(["# One", "alpha"]))
-    }
-
     func testPaneResolverIsSameTabAndLeftToRight() throws {
         let panes = [
             WezTermPane(paneID: 20, tabID: 1, leftCol: 80, topRow: 0, title: "agent-right"),

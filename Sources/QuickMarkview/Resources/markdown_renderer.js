@@ -140,17 +140,29 @@
 
   const post = message => window.webkit.messageHandlers.quickMarkview.postMessage(message);
 
+  function lineRange(nodes) {
+    nodes = nodes.map(nearest).filter(Boolean);
+    if (!nodes.length) return null;
+    return {lineStart: Math.min(...nodes.map(node => Number(node.dataset.sourceStart))), lineEnd: Math.max(...nodes.map(node => Number(node.dataset.sourceEnd)))};
+  }
+
   function sendSelection() {
     const selection = window.getSelection();
     if (!selection || selection.isCollapsed || !selection.toString().trim()) {
       post({type: "selectionCleared", revision: window.quickMarkview.currentRevision});
       return;
     }
-    const nodes = [nearest(selection.anchorNode), nearest(selection.focusNode)].filter(Boolean);
-    if (!nodes.length) return;
-    const starts = nodes.map(node => Number(node.dataset.sourceStart));
-    const ends = nodes.map(node => Number(node.dataset.sourceEnd));
-    post({type: "selection", text: selection.toString(), lineStart: Math.min(...starts), lineEnd: Math.max(...ends), revision: window.quickMarkview.currentRevision});
+    const range = lineRange([selection.anchorNode, selection.focusNode]);
+    if (range) post({type: "selection", text: selection.toString(), ...range, revision: window.quickMarkview.currentRevision});
+  }
+
+  let stashRanges = [];
+  function applyStashMarks() {
+    document.querySelectorAll(".stashed").forEach(node => node.classList.remove("stashed"));
+    document.querySelectorAll("#content [data-source-start]").forEach(node => {
+      const start = Number(node.dataset.sourceStart), end = Number(node.dataset.sourceEnd);
+      if (stashRanges.some(([first, last]) => first <= start && end <= last)) node.classList.add("stashed");
+    });
   }
 
   // The DOM selection is the Vim cursor; #cursor only draws its focus end.
@@ -587,7 +599,19 @@
     " aa": () => {
       if (!mode && window.getSelection().isCollapsed) { enterLineVisual(); sendSelection(); }
       post({type: "requestInput"});
-    }
+    },
+    " ay": () => {
+      if (!mode && window.getSelection().isCollapsed) enterLineVisual();
+      sendSelection();
+      post({type: "stash"});
+      leaveVisual();
+    },
+    " ax": () => {
+      const selection = window.getSelection();
+      const range = lineRange(selection.isCollapsed ? [caret()[0]] : [selection.anchorNode, selection.focusNode]);
+      if (range) post({type: "unstash", ...range});
+    },
+    [" a" + ESC]: () => post({type: "clearStash"})
   };
   const isPrefix = keys => Object.keys(bindings).some(sequence => sequence.startsWith(keys));
 
@@ -661,6 +685,7 @@
       } else {
         content.innerHTML = md.renderer.render(tokens, md.options, env);
       }
+      applyStashMarks();
       this.currentRevision = Number(revision || 0);
       if (tokens) {
         const sources = imageSources(tokens);
@@ -705,6 +730,7 @@
       toc.hidden = !toc.hidden;
       drawCursor();
     },
+    setStashMarks: function (ranges) { stashRanges = ranges; applyStashMarks(); },
     visibleLine: visibleLine,
     findStatus: findStatus,
     selectedText: sendSelection,

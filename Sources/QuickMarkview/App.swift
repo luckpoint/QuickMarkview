@@ -159,6 +159,8 @@ final class ViewerViewController: NSViewController, WKNavigationDelegate, WKScri
     private var watcher: FileWatcher?
     private var document: MarkdownDocument?
     private var selection: RenderedSelection?
+    private var basket = ContextBasket()
+    private var requestBasket = ContextBasket()
     private var revision: UInt64 = 0
     private var webReady = false
     private var queuedSource: String?
@@ -194,7 +196,9 @@ final class ViewerViewController: NSViewController, WKNavigationDelegate, WKScri
     let findBar = NSVisualEffectView()
     private var webView: WKWebView!
 
-    private static let idleStatus = "v/V select · Space a a request · q quit"
+    private static let idleStatus = "v/V select · Space a y stash · Space a a request · q quit"
+    private var readyStatus: String { stashStatus(Self.idleStatus) }
+    private func stashStatus(_ message: String) -> String { basket.items.isEmpty ? message : "📎 \(basket.items.count) · \(message)" }
 
     init(options: LaunchOptions) {
         self.options = options
@@ -282,14 +286,62 @@ final class ViewerViewController: NSViewController, WKNavigationDelegate, WKScri
     }
 
     private func showRequestPanel() {
-        guard let document, let selection, selection.revision == revision else { statusLabel.stringValue = "Select text with v first."; return }
-        let prompt = PromptBuilder.build(context: document, range: selection.sourceRange, request: "", selectedText: selection.text)
-        requestHint.stringValue = "Lines \(selection.sourceRange.startLine)-\(selection.sourceRange.endLine) · first line /btw for side chat · ⇧↩ send · esc cancel"
-        requestView.string = prompt
-        requestView.setSelectedRange(NSRange(location: Self.requestCursor(in: prompt), length: 0))
-        requestView.scrollRangeToVisible(requestView.selectedRange())
+        requestBasket = basket
+        if let document, let selection, selection.revision == revision {
+            requestBasket.add(ContextItem(document: document, range: selection.sourceRange, text: selection.text), fileLines: document.lines)
+        }
+        guard !requestBasket.items.isEmpty else { statusLabel.stringValue = "Select text with v first."; return }
+        presentRequest("")
         requestPanel.isHidden = false
         view.window?.makeFirstResponder(requestView)
+    }
+
+    private func presentRequest(_ request: String) {
+        let items = requestBasket.items
+        let prompt = PromptBuilder.build(items: items, request: request)
+        let scope = items.count == 1 ? "Lines \(items[0].range.startLine)-\(items[0].range.endLine)" : "\(items.count) selections"
+        requestHint.stringValue = "\(scope) · first line /btw for side chat · ⇧↩ send · esc cancel"
+        requestView.string = prompt
+        let cursor = request.isEmpty ? Self.requestCursor(in: prompt) : NSMaxRange((prompt as NSString).range(of: request))
+        requestView.setSelectedRange(NSRange(location: cursor, length: 0))
+        requestView.scrollRangeToVisible(requestView.selectedRange())
+    }
+
+    /// Re-reads every file in the request. If a save moved or dropped an item,
+    /// the prompt is rebuilt around the typed request and nothing is sent.
+    private func requestStillCurrent() -> Bool {
+        var files: [URL: [String]] = [:]
+        for url in Set(requestBasket.items.map(\.url)) {
+            guard let text = try? String(contentsOf: url, encoding: .utf8) else { statusLabel.stringValue = "\(url.lastPathComponent) could not be read before sending."; return false }
+            files[url] = MarkdownDocument(url: url, text: text).lines
+        }
+        let before = requestBasket.items
+        for (url, lines) in files { requestBasket.reanchor(url: url, lines: lines); basket.reanchor(url: url, lines: lines) }
+        if let document, let lines = files[document.url], lines != document.lines { reloadAfterExternalChange() }
+        guard requestBasket.items != before else { return true }
+        let changed = Set(before.filter { !requestBasket.items.contains($0) }.map(\.url.lastPathComponent)).sorted().joined(separator: ", ")
+        guard !requestBasket.items.isEmpty else { hideRequestPanel(); statusLabel.stringValue = stashStatus("\(changed) changed; nothing left to send."); return false }
+        if let request = PromptBuilder.request(in: requestView.string) { presentRequest(request) }
+        statusLabel.stringValue = "\(changed) changed; review and press ⇧↩ again."
+        return false
+    }
+
+    private func reconcileBasket() {
+        guard let document else { return }
+        let dropped = basket.reanchor(url: document.url, lines: document.lines)
+        if dropped > 0 { statusLabel.stringValue = stashStatus("\(document.url.lastPathComponent) changed; \(dropped) stashed selection\(dropped == 1 ? "" : "s") dropped.") }
+        pushStashMarks()
+    }
+
+    private func pushStashMarks() {
+        let ranges = document.map { basket.ranges(in: $0.url).map { [$0.startLine, $0.endLine] } } ?? []
+        let json = (try? String(data: JSONEncoder().encode(ranges), encoding: .utf8)) ?? "[]"
+        webView?.evaluateJavaScript("window.quickMarkview.setStashMarks(\(json));", completionHandler: nil)
+    }
+
+    private func stashChanged(_ message: String) {
+        pushStashMarks()
+        statusLabel.stringValue = stashStatus(message)
     }
 
     static func requestCursor(in prompt: String) -> Int {
@@ -314,7 +366,8 @@ final class ViewerViewController: NSViewController, WKNavigationDelegate, WKScri
             selection = nil
             recentFiles.add(url)
             pathLabel.stringValue = url.path; lineLabel.stringValue = line.map { "line \($0)" } ?? ""
-            statusLabel.stringValue = Self.idleStatus
+            statusLabel.stringValue = readyStatus
+            reconcileBasket()
             watcher?.stop(); watcher = FileWatcher(fileURL: url) { [weak self] in DispatchQueue.main.async { self?.reloadAfterExternalChange() } }; watcher?.start()
             queuedSource = text; queuedLine = line; renderCurrentDocument()
             return true
@@ -343,6 +396,7 @@ final class ViewerViewController: NSViewController, WKNavigationDelegate, WKScri
             revision &+= 1; document = MarkdownDocument(url: url, text: text, revision: revision)
             selection = nil
             statusLabel.stringValue = "External change loaded; the current edit was cancelled."
+            reconcileBasket()
             queuedSource = text; queuedLine = nil; renderCurrentDocument()
         } catch { statusLabel.stringValue = "File changed but could not be read: \(error.localizedDescription)" }
     }
@@ -400,8 +454,9 @@ final class ViewerViewController: NSViewController, WKNavigationDelegate, WKScri
                     self.document = MarkdownDocument(url: url, text: updatedText, revision: self.revision)
                     self.selection = nil
                     self.isEditingText = false
-                    self.statusLabel.stringValue = Self.idleStatus
+                    self.statusLabel.stringValue = self.readyStatus
                     self.completeTextEdit(success: true, error: nil)
+                    self.reconcileBasket()
                 } else {
                     let message: String
                     if case .failure(let error) = result {
@@ -621,17 +676,14 @@ final class ViewerViewController: NSViewController, WKNavigationDelegate, WKScri
 
     private func sendPrompt() {
         guard !isSending else { return }
-        guard let document, let selection, selection.revision == revision, let originPaneID else { statusLabel.stringValue = "Select text again after the file reload."; return }
-        // Re-read before sending. This catches a save that arrived between the
-        // watcher event and the user's keystroke and invalidates its selection.
-        guard let current = try? String(contentsOf: document.url, encoding: .utf8) else { statusLabel.stringValue = "The file could not be read before sending."; return }
-        if current != document.text { reloadAfterExternalChange(); return }
+        guard !requestBasket.items.isEmpty, let originPaneID else { statusLabel.stringValue = "Select text again after the file reload."; return }
+        guard requestStillCurrent() else { return }
         let prompt = requestView.string
         guard !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { statusLabel.stringValue = "Prompt is empty."; return }
         isSending = true; statusLabel.stringValue = "Rechecking WezTerm panes…"
         service.listPanes { [weak self] result in DispatchQueue.main.async {
             guard let self else { return }
-            guard self.document?.revision == document.revision, self.selection?.revision == selection.revision else { self.isSending = false; self.statusLabel.stringValue = "File reloaded; select text again."; return }
+            guard self.requestStillCurrent() else { self.isSending = false; return }
             switch result {
             case .failure(let error): self.isSending = false; self.statusLabel.stringValue = error.localizedDescription
             case .success(let panes):
@@ -644,7 +696,9 @@ final class ViewerViewController: NSViewController, WKNavigationDelegate, WKScri
                         guard let self else { return }
                         self.isSending = false
                         switch result {
-                        case .success: self.statusLabel.stringValue = "Sent to pane \(target.paneID)."; self.hideRequestPanel()
+                        case .success:
+                            self.basket.clear(); self.pushStashMarks()
+                            self.statusLabel.stringValue = "Sent to pane \(target.paneID)."; self.hideRequestPanel()
                         case .failure(let error): self.statusLabel.stringValue = error.localizedDescription
                         }
                     } }
@@ -678,6 +732,20 @@ final class ViewerViewController: NSViewController, WKNavigationDelegate, WKScri
             return
         }
         if type == "requestInput" { showRequestPanel(); return }
+        if type == "stash" {
+            guard let document, let selection, selection.revision == revision else { statusLabel.stringValue = "Select text with v first."; return }
+            let range = selection.sourceRange
+            let added = basket.add(ContextItem(document: document, range: range, text: selection.text), fileLines: document.lines)
+            stashChanged(added ? "Stashed lines \(range.startLine)-\(range.endLine)." : "Already stashed.")
+            return
+        }
+        if type == "unstash" {
+            guard let document, let start = body["lineStart"] as? Int, let end = body["lineEnd"] as? Int else { return }
+            let removed = basket.remove(url: document.url, overlapping: SourceRange(startLine: start, endLine: end))
+            stashChanged(removed == 0 ? "Nothing stashed here." : "Removed \(removed) stashed selection\(removed == 1 ? "" : "s").")
+            return
+        }
+        if type == "clearStash" { basket.clear(); stashChanged("Stash cleared."); return }
         if type == "editStarted" {
             guard let incomingRevision = body["revision"] as? Int, incomingRevision == Int(revision) else { return }
             isEditingText = true
@@ -686,7 +754,7 @@ final class ViewerViewController: NSViewController, WKNavigationDelegate, WKScri
         }
         if type == "editFinished" {
             isEditingText = false
-            if statusLabel.stringValue.hasPrefix("Editing") { statusLabel.stringValue = Self.idleStatus }
+            if statusLabel.stringValue.hasPrefix("Editing") { statusLabel.stringValue = readyStatus }
             return
         }
         if type == "editUnavailable" { statusLabel.stringValue = "This text cannot be edited yet."; return }

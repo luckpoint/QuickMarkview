@@ -203,10 +203,6 @@ public struct ContextItem: Equatable, Sendable {
 
     public var content: String { text.isEmpty ? sourceLines.joined(separator: "\n") : text }
 
-    public func matches(_ lines: [String]) -> Bool {
-        range.endLine <= lines.count && Array(lines[(range.startLine - 1)..<range.endLine]) == sourceLines
-    }
-
     /// Follows the range through a line diff; falls back to the only exact
     /// occurrence of `sourceLines`, so a moved block is still found.
     func reanchored(map: [Int?], lines: [String]) -> ContextItem? {

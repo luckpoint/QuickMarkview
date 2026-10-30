@@ -315,6 +315,37 @@ final class VimKeyTests: XCTestCase, WKNavigationDelegate, WKScriptMessageHandle
         XCTAssertEqual(lastMessage?["fromLine"] as? Int, 1)
     }
 
+    func testStashKeysPostSelectionRanges() {
+        let view = loadViewer("# One\n\nalpha beta\n\ngamma delta\n")
+        press(view, "j", "v", "l", "l")
+        awaitMessage("stash") { press(view, " ", "a", "y") }
+        XCTAssertEqual(lastSelection?["text"] as? String, "al")
+        XCTAssertEqual(lastSelection?["lineStart"] as? Int, 3)
+        XCTAssertEqual(js(view, "getSelection().isCollapsed"), "1")
+
+        press(view, "j")
+        lastSelection = nil
+        awaitMessage("stash") { press(view, " ", "a", "y") }
+        XCTAssertEqual(lastSelection?["text"] as? String, "gamma delta")
+        XCTAssertEqual(lastSelection?["lineStart"] as? Int, 5)
+
+        awaitMessage("unstash") { press(view, " ", "a", "x") }
+        XCTAssertEqual(lastMessage?["lineStart"] as? Int, 5)
+        XCTAssertEqual(lastMessage?["lineEnd"] as? Int, 5)
+
+        awaitMessage("clearStash") { press(view, " ", "a", "Escape") }
+    }
+
+    func testStashMarksSurviveRerender() {
+        let view = loadViewer("# One\n\nalpha beta\n\ngamma delta\n")
+        _ = js(view, "window.quickMarkview.setStashMarks([[3, 3]]); ''")
+        XCTAssertEqual(js(view, "Array.from(document.querySelectorAll('.stashed')).map(n => n.textContent).join('|')"), "alpha beta")
+        _ = js(view, "window.quickMarkview.setDocument('# One\\n\\nalpha beta\\n\\ngamma delta\\n', null, 2); ''")
+        XCTAssertEqual(js(view, "document.querySelector('.stashed').dataset.sourceStart"), "3")
+        _ = js(view, "window.quickMarkview.setStashMarks([]); ''")
+        XCTAssertEqual(js(view, "String(document.querySelectorAll('.stashed').length)"), "0")
+    }
+
     func testControlRightBracketOutsideLinkDoesNothing() {
         let view = loadViewer("plain text\n")
         lastOpenLink = nil
