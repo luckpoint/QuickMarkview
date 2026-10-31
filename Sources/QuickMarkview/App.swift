@@ -75,6 +75,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             if self.controller.handleFileNavigationKey(event) { return nil }
             if self.controller?.isTextEditActive == true { return event }
             guard Self.closesViewer(characters: event.characters, firstResponder: window.firstResponder) else { return event }
+            self.controller.hideZoomToast()
             window.orderOut(nil)
             return nil
         }
@@ -112,6 +113,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
+        (sender.contentViewController as? ViewerViewController)?.hideZoomToast()
         sender.orderOut(nil)
         return false
     }
@@ -152,6 +154,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         viewMenu.addItem(withTitle: "Toggle Sidebar", action: #selector(ViewerViewController.toggleSidebar(_:)), keyEquivalent: "l")
         viewMenu.addItem(withTitle: "Go to Markdown File…", action: #selector(ViewerViewController.toggleFileFinder(_:)), keyEquivalent: "k")
         viewMenu.items.last?.keyEquivalentModifierMask = [.command]
+        viewMenu.addItem(.separator())
+        viewMenu.addItem(withTitle: "Mark All Changes Reviewed (Space c c)", action: #selector(ViewerViewController.acknowledgeChanges(_:)), keyEquivalent: "")
         viewItem.submenu = viewMenu; menu.addItem(viewItem)
         return menu
     }
@@ -174,6 +178,10 @@ final class ViewerViewController: NSViewController, WKNavigationDelegate, WKScri
     private var selection: RenderedSelection?
     private var basket = ContextBasket()
     private var requestBasket = ContextBasket()
+    private var zoomState = ZoomState()
+    let zoomToast = ZoomToastView()
+    private var zoomTopConstraint: NSLayoutConstraint?
+    private var zoomFindConstraint: NSLayoutConstraint?
     private var revision: UInt64 = 0
     private var webReady = false
     private var queuedSource: String?
@@ -191,6 +199,11 @@ final class ViewerViewController: NSViewController, WKNavigationDelegate, WKScri
     private var isEditingText = false
     private var isSavingTextEdit = false
     private var pendingFileChange = false
+    private let reviewSession = ChangeReviewSession()
+    private var reviewTimer: Timer?
+    private var reviewChanges: [ReviewChange] = []
+    private var pendingReviewJump: Int?
+    private let reviewButton = NSButton(title: "Changes 0 · Review All", target: nil, action: nil)
     private let fileEditQueue = DispatchQueue(label: "quickmarkview.fileedit", qos: .utility)
     var isTextEditActive: Bool { isEditingText }
 
@@ -229,7 +242,7 @@ final class ViewerViewController: NSViewController, WKNavigationDelegate, WKScri
         fileFinder.onChoose = { [weak self] url in self?.chooseMarkdownFile(url) }
         fileFinder.onCancel = { [weak self] in self?.hideFileFinder() }
         let findBar = makeFindBar()
-        for subview in [toolbar, page, panel, fileFinder, findBar] { subview.translatesAutoresizingMaskIntoConstraints = false; root.addSubview(subview) }
+        for subview in [toolbar, page, panel, fileFinder, findBar, zoomToast] { subview.translatesAutoresizingMaskIntoConstraints = false; root.addSubview(subview) }
         NSLayoutConstraint.activate([
             toolbar.topAnchor.constraint(equalTo: root.topAnchor), toolbar.leadingAnchor.constraint(equalTo: root.leadingAnchor), toolbar.trailingAnchor.constraint(equalTo: root.trailingAnchor), toolbar.heightAnchor.constraint(equalToConstant: 46),
             page.topAnchor.constraint(equalTo: toolbar.bottomAnchor), page.leadingAnchor.constraint(equalTo: root.leadingAnchor), page.trailingAnchor.constraint(equalTo: root.trailingAnchor), page.bottomAnchor.constraint(equalTo: root.bottomAnchor),
@@ -237,6 +250,10 @@ final class ViewerViewController: NSViewController, WKNavigationDelegate, WKScri
             fileFinder.centerXAnchor.constraint(equalTo: root.centerXAnchor), fileFinder.centerYAnchor.constraint(equalTo: root.centerYAnchor, constant: 40), fileFinder.widthAnchor.constraint(equalTo: root.widthAnchor, multiplier: 0.6), fileFinder.heightAnchor.constraint(equalTo: root.heightAnchor, multiplier: 0.55),
             findBar.topAnchor.constraint(equalTo: toolbar.bottomAnchor, constant: 8), findBar.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -16), findField.widthAnchor.constraint(equalToConstant: 300)
         ])
+        zoomTopConstraint = zoomToast.topAnchor.constraint(equalTo: page.topAnchor, constant: 16)
+        zoomFindConstraint = zoomToast.topAnchor.constraint(equalTo: findBar.bottomAnchor, constant: 8)
+        zoomTopConstraint?.isActive = true
+        zoomToast.trailingAnchor.constraint(equalTo: page.trailingAnchor, constant: -16).isActive = true
         self.view = root
     }
 
@@ -248,12 +265,15 @@ final class ViewerViewController: NSViewController, WKNavigationDelegate, WKScri
     }
 
     private func makeToolbar() -> NSView {
+        reviewButton.target = self; reviewButton.action = #selector(acknowledgeChanges(_:))
+        reviewButton.toolTip = "Mark all changes in all files reviewed (Space → c → c)"
+        reviewButton.bezelStyle = .rounded
         openButton.target = self; openButton.action = #selector(chooseFile(_:)); openButton.bezelStyle = .rounded
         pathLabel.font = .systemFont(ofSize: 12); pathLabel.lineBreakMode = .byTruncatingMiddle; pathLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
         lineLabel.font = .monospacedSystemFont(ofSize: 11, weight: .regular); lineLabel.textColor = .secondaryLabelColor
         statusLabel.font = .systemFont(ofSize: 11); statusLabel.textColor = .secondaryLabelColor; statusLabel.lineBreakMode = .byTruncatingTail; statusLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         targetPopup.addItem(withTitle: "Target pane"); targetPopup.target = self; targetPopup.action = #selector(targetChanged(_:)); targetPopup.setContentHuggingPriority(.required, for: .horizontal)
-        let stack = NSStackView(views: [openButton, pathLabel, lineLabel, statusLabel, targetPopup]); stack.orientation = .horizontal; stack.spacing = 8; stack.edgeInsets = NSEdgeInsets(top: 8, left: 10, bottom: 8, right: 10); stack.translatesAutoresizingMaskIntoConstraints = false
+        let stack = NSStackView(views: [openButton, pathLabel, lineLabel, statusLabel, reviewButton, targetPopup]); stack.orientation = .horizontal; stack.spacing = 8; stack.edgeInsets = NSEdgeInsets(top: 8, left: 10, bottom: 8, right: 10); stack.translatesAutoresizingMaskIntoConstraints = false
         let container = NSView(); container.addSubview(stack); NSLayoutConstraint.activate([stack.leadingAnchor.constraint(equalTo: container.leadingAnchor), stack.trailingAnchor.constraint(equalTo: container.trailingAnchor), stack.topAnchor.constraint(equalTo: container.topAnchor), stack.bottomAnchor.constraint(equalTo: container.bottomAnchor)])
         return container
     }
@@ -369,8 +389,11 @@ final class ViewerViewController: NSViewController, WKNavigationDelegate, WKScri
     @discardableResult
     func open(url: URL, line: Int?) -> Bool {
         let url = url.standardizedFileURL
+        pendingReviewJump = nil
         do {
             let text = try String(contentsOf: url, encoding: .utf8)
+            reviewSession.register(url: url, text: text)
+            startReviewSession()
             webView.evaluateJavaScript("window.quickMarkview.cancelEdit();", completionHandler: nil)
             isEditingText = false
             revision &+= 1
@@ -381,6 +404,7 @@ final class ViewerViewController: NSViewController, WKNavigationDelegate, WKScri
             statusLabel.stringValue = readyStatus
             reconcileBasket()
             watcher?.stop(); watcher = FileWatcher(fileURL: url) { [weak self] in DispatchQueue.main.async { self?.reloadAfterExternalChange() } }; watcher?.start()
+            reviewChanges = []
             queuedSource = text; queuedLine = line; renderCurrentDocument()
             return true
         } catch { statusLabel.stringValue = "Could not open file: \(error.localizedDescription)"; return false }
@@ -399,7 +423,9 @@ final class ViewerViewController: NSViewController, WKNavigationDelegate, WKScri
         if isSavingTextEdit { pendingFileChange = true; return }
         guard let url = document?.url else { return }
         do {
-            let text = try String(contentsOf: url, encoding: .utf8)
+            let diskText = try ChangeReviewSession.read(url.path)
+            let text = diskText ?? ""
+            pathLabel.stringValue = url.path + (diskText == nil ? " (deleted)" : "")
             guard text != document?.text else { return }
             if isEditingText {
                 isEditingText = false
@@ -407,7 +433,7 @@ final class ViewerViewController: NSViewController, WKNavigationDelegate, WKScri
             }
             revision &+= 1; document = MarkdownDocument(url: url, text: text, revision: revision)
             selection = nil
-            statusLabel.stringValue = "External change loaded; the current edit was cancelled."
+            statusLabel.stringValue = "External change loaded · [[ / ]] changes · Space c c review all"
             reconcileBasket()
             queuedSource = text; queuedLine = nil; renderCurrentDocument()
         } catch { statusLabel.stringValue = "File changed but could not be read: \(error.localizedDescription)" }
@@ -469,6 +495,7 @@ final class ViewerViewController: NSViewController, WKNavigationDelegate, WKScri
                     self.statusLabel.stringValue = self.readyStatus
                     self.completeTextEdit(success: true, error: nil)
                     self.reconcileBasket()
+                    self.refreshReview()
                 } else {
                     let message: String
                     if case .failure(let error) = result {
@@ -507,6 +534,85 @@ final class ViewerViewController: NSViewController, WKNavigationDelegate, WKScri
         }
         webView.evaluateJavaScript("window.quickMarkview.setDocument(\(sourceLiteral), \(lineLiteral), \(revision), \(languageLiteral));", completionHandler: nil)
         queuedSource = nil
+        refreshReview()
+    }
+
+    private func startReviewSession() {
+        guard reviewTimer == nil else { return }
+        reviewTimer = Timer.scheduledTimer(timeInterval: 1, target: self, selector: #selector(pollReview), userInfo: nil, repeats: true)
+    }
+
+    @objc private func pollReview() {
+        reloadAfterExternalChange()
+        refreshReview()
+    }
+
+    private func refreshReview() {
+        guard webReady, let document else { return }
+        do {
+            let state = try reviewSession.snapshot()
+            let baseline = state[document.url.path]?.baseline ?? document.text
+            if let file = state[document.url.path], file.current == document.text {
+                reviewChanges = file.changes
+            } else { reviewChanges = ReviewChange.compare(baseline, document.text) }
+            let count = state.values.reduce(0) { $0 + $1.changes.count }
+            reviewButton.title = "Changes \(count) · Review All"
+            let payload = String(data: try JSONEncoder().encode(reviewChanges), encoding: .utf8)!
+            webView.evaluateJavaScript("window.quickMarkview.setReviewChanges(\(payload), \(revision));", completionHandler: nil)
+        } catch { statusLabel.stringValue = "Could not load change review: \(error.localizedDescription)" }
+    }
+
+    @objc func acknowledgeChanges(_ sender: Any?) {
+        guard !isSavingTextEdit else { statusLabel.stringValue = "Wait for the edit to finish saving."; return }
+        do {
+            try reviewSession.acknowledge()
+            pollReview()
+            statusLabel.stringValue = "All changes in all files marked reviewed."
+        } catch { statusLabel.stringValue = "Could not mark changes reviewed: \(error.localizedDescription)" }
+    }
+
+    private func navigateReviewFile(direction: Int) {
+        guard let document else { return }
+        do {
+            if let target = try reviewSession.nextFile(after: document.url.path, direction: direction) {
+                showReviewFile(path: target.path, index: target.index)
+                return
+            }
+            statusLabel.stringValue = direction > 0 ? "Last change reached." : "First change reached."
+        } catch { statusLabel.stringValue = "Could not navigate changes: \(error.localizedDescription)" }
+    }
+
+    private func showReviewFile(path: String, index: Int) {
+        let url = URL(fileURLWithPath: path)
+        if document?.url != url {
+            if FileManager.default.fileExists(atPath: path) {
+                guard open(url: url, line: nil) else { return }
+            } else {
+                // Keep a deleted file reviewable without resurrecting it on disk.
+                reviewSession.register(url: url, text: "")
+                webView.evaluateJavaScript("window.quickMarkview.cancelEdit();", completionHandler: nil)
+                isEditingText = false
+                revision &+= 1
+                document = MarkdownDocument(url: url, text: "", revision: revision)
+                selection = nil
+                pathLabel.stringValue = "\(path) (deleted)"
+                lineLabel.stringValue = ""
+                statusLabel.stringValue = "File deleted · select the deletion marker to review previous source."
+                reconcileBasket()
+                watcher?.stop(); watcher = FileWatcher(fileURL: url) { [weak self] in DispatchQueue.main.async { self?.reloadAfterExternalChange() } }; watcher?.start()
+                queuedSource = ""; queuedLine = nil; renderCurrentDocument()
+            }
+        } else { pollReview() }
+        pendingReviewJump = index
+        view.window?.makeKeyAndOrderFront(nil)
+        NSRunningApplication.current.activate(options: [.activateIgnoringOtherApps])
+        view.window?.makeFirstResponder(webView)
+        jumpToPendingReview()
+    }
+
+    private func jumpToPendingReview() {
+        guard let index = pendingReviewJump else { return }
+        webView.evaluateJavaScript("window.quickMarkview.jumpToReviewChange(\(index));", completionHandler: nil)
     }
 
     @objc func chooseFile(_ sender: Any?) {
@@ -559,12 +665,14 @@ final class ViewerViewController: NSViewController, WKNavigationDelegate, WKScri
     @objc func showFind(_ sender: Any?) {
         if !fileFinder.isHidden { hideFileFinder() }
         findBar.isHidden = false
+        updateZoomToastPosition()
         view.window?.makeFirstResponder(findField)
         findField.currentEditor()?.selectAll(nil)
     }
 
     private func hideFind() {
         findBar.isHidden = true
+        updateZoomToastPosition()
         view.window?.makeFirstResponder(webView)
     }
 
@@ -719,9 +827,42 @@ final class ViewerViewController: NSViewController, WKNavigationDelegate, WKScri
         } }
     }
 
+    func hideZoomToast() { zoomToast.dismiss() }
+
+    private func updateZoomToastPosition() {
+        zoomTopConstraint?.isActive = false
+        zoomFindConstraint?.isActive = false
+        if findBar.isHidden { zoomTopConstraint?.isActive = true }
+        else { zoomFindConstraint?.isActive = true }
+    }
+
+    func handleZoomMessage(_ body: [String: Any]) {
+        guard document != nil, body["revision"] as? Int == Int(revision),
+              let rawAction = body["action"] as? String, let action = ZoomState.Action(rawValue: rawAction),
+              !isEditingText, requestPanel.isHidden, fileFinder.isHidden,
+              !(view.window?.firstResponder is NSTextView) else { return }
+        guard zoomState.apply(action: action) else { return }
+        webView.pageZoom = zoomState.pageZoom
+        zoomToast.show(percent: zoomState.percent)
+        webView.evaluateJavaScript("window.quickMarkview.refreshAfterZoom();", completionHandler: nil)
+    }
+
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
         guard let body = message.body as? [String: Any], let type = body["type"] as? String else { return }
-        if type == "ready" { webReady = true; renderCurrentDocument(); return }
+        if type == "zoom" { handleZoomMessage(body); return }
+        if type == "ready" {
+            webReady = true; renderCurrentDocument()
+            if body["revision"] as? Int == Int(revision) { jumpToPendingReview(); pendingReviewJump = nil }
+            return
+        }
+        if type == "acknowledgeChanges" {
+            guard body["revision"] as? Int == Int(revision) else { return }
+            acknowledgeChanges(nil); return
+        }
+        if type == "navigateReviewFile" {
+            guard let incoming = body["revision"] as? Int, incoming == Int(revision), let direction = body["direction"] as? Int, abs(direction) == 1 else { return }
+            navigateReviewFile(direction: direction); return
+        }
         if type == "resolveImages" {
             guard let document, let incomingRevision = body["revision"] as? Int,
                   incomingRevision == Int(revision), let sources = body["sources"] as? [String] else { return }

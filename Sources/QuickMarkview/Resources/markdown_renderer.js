@@ -196,7 +196,10 @@
     return node.nodeType === 1 ? node.getBoundingClientRect() : null;
   }
 
-  const cursorRect = () => rectAt(mode === "V" ? cursor : caret());
+  const cursorRect = () => {
+    const point = mode === "V" ? cursor : caret();
+    return point && nearest(point[0]) ? rectAt(point) : null;
+  };
 
   function drawCursor(scroll = false) {
     const mark = document.getElementById("cursor"), rect = cursorRect();
@@ -576,7 +579,133 @@
     if (node) window.getSelection().collapse(node, offset);
   }
 
+  // Review decorations live outside #content. In particular, deleted source
+  // never acquires current-source coordinates or enters a sent selection.
+  let reviewChanges = [], reviewTargets = [], reviewIndex = -1, reviewCaret = null, reviewSignature = "";
+  const reviewLayer = document.createElement("div");
+  reviewLayer.id = "review-marks";
+  document.body.appendChild(reviewLayer);
+  const reviewDetails = document.createElement("section");
+  reviewDetails.id = "review-details";
+  reviewDetails.hidden = true;
+  reviewDetails.setAttribute("aria-label", "Previous source");
+  const reviewTitle = document.createElement("strong"), reviewClose = document.createElement("button"), reviewText = document.createElement("textarea");
+  reviewClose.textContent = "Close (Esc)";
+  reviewClose.type = "button";
+  reviewText.readOnly = true;
+  reviewText.setAttribute("aria-label", "Previous source (read only)");
+  reviewDetails.append(reviewTitle, reviewClose, reviewText);
+  document.body.appendChild(reviewDetails);
+  function closeReviewDetails() {
+    reviewDetails.hidden = true;
+    document.getElementById("content").focus({preventScroll: true});
+  }
+  reviewClose.onclick = closeReviewDetails;
+  reviewDetails.addEventListener("keydown", event => {
+    event.stopPropagation();
+    if (event.key === "Escape") { event.preventDefault(); closeReviewDetails(); }
+  });
+
+  function reviewKind(change) {
+    return change.oldStart === change.oldEnd ? "added" : change.newStart === change.newEnd ? "deleted" : "modified";
+  }
+
+  function layoutReviewMarks() {
+    const content = document.getElementById("content");
+    content.querySelectorAll(".review-added, .review-modified").forEach(node => node.classList.remove("review-added", "review-modified"));
+    reviewLayer.replaceChildren();
+    const nodes = Array.from(content.querySelectorAll("[data-source-start]")).filter(node => node.getClientRects().length);
+    const rect = content.getBoundingClientRect();
+    const markerTops = [];
+    reviewTargets = reviewChanges.map((change, index) => {
+      const kind = reviewKind(change), first = change.newStart + 1, last = change.newEnd;
+      const overlaps = nodes.filter(node => Number(node.dataset.sourceStart) <= last && Number(node.dataset.sourceEnd) >= first);
+      // Only the smallest mapped blocks get backgrounds: a changed list item
+      // must not color its entire enclosing list or blockquote.
+      const leaves = overlaps.filter(node => !overlaps.some(other => other !== node && node.contains(other)));
+      if (kind !== "deleted") leaves.forEach(node => node.classList.add(`review-${kind}`));
+      const following = nodes.filter(node => Number(node.dataset.sourceStart) >= first)
+        .sort((a, b) => Number(a.dataset.sourceStart) - Number(b.dataset.sourceStart) || Number(a.dataset.sourceEnd) - Number(b.dataset.sourceEnd))[0];
+      const previous = nodes.filter(node => Number(node.dataset.sourceEnd) < first)
+        .sort((a, b) => Number(b.dataset.sourceEnd) - Number(a.dataset.sourceEnd) || Number(b.dataset.sourceStart) - Number(a.dataset.sourceStart))[0];
+      const enclosing = nodes.filter(node => Number(node.dataset.sourceStart) < first && Number(node.dataset.sourceEnd) >= first)
+        .sort((a, b) => (Number(a.dataset.sourceEnd) - Number(a.dataset.sourceStart)) - (Number(b.dataset.sourceEnd) - Number(b.dataset.sourceStart)))[0];
+      const node = kind !== "deleted" && leaves[0] || enclosing || following || previous || null;
+      const nodeRect = node && node.getBoundingClientRect();
+      const atEnd = !enclosing && !following && previous;
+      const top = (nodeRect ? atEnd ? nodeRect.bottom : nodeRect.top : rect.top + 38) + window.scrollY;
+      let markerTop = top;
+      while (markerTops.some(other => Math.abs(other - markerTop) < 23)) markerTop += 23;
+      markerTops.push(markerTop);
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = `review-marker review-${kind}`;
+      if (index === reviewIndex) button.classList.add("review-current");
+      const label = kind === "deleted" ? `−${change.oldEnd - change.oldStart}` : kind === "added" ? `+${change.newEnd - change.newStart}` : "~";
+      button.dataset.label = label;
+      button.setAttribute("aria-label", `${kind} change ${index + 1}${change.oldEnd > change.oldStart ? "; show previous source" : ""}`);
+      button.title = kind === "added" ? `Added lines ${first}–${last}`
+        : kind === "deleted" ? `${change.oldEnd - change.oldStart} lines deleted · click to view previous source`
+        : `Modified lines ${first}–${last} · click to view previous source`;
+      Object.assign(button.style, {left: `${Math.max(2, rect.left + window.scrollX + 8)}px`, top: `${markerTop}px`});
+      button.addEventListener("mousedown", event => event.preventDefault());
+      button.onclick = () => {
+        jumpToReviewChange(index);
+        if (change.oldEnd > change.oldStart) {
+          reviewTitle.textContent = `Previous source · lines ${change.oldStart + 1}–${change.oldEnd}`;
+          reviewText.value = change.oldText;
+          reviewDetails.hidden = false;
+          reviewText.focus({preventScroll: true});
+        }
+      };
+      reviewLayer.appendChild(button);
+      return {node, top, button};
+    });
+  }
+
+  function jumpToReviewChange(index) {
+    const target = reviewTargets[index];
+    if (!target) return false;
+    reviewDetails.hidden = true;
+    mode = "";
+    if (target.node) placeCaret(target.node);
+    else window.getSelection().collapse(document.getElementById("content"), 0);
+    reviewIndex = index;
+    reviewCaret = caret();
+    window.scrollTo(0, Math.max(0, target.top - 70));
+    reviewLayer.querySelectorAll(".review-current").forEach(node => node.classList.remove("review-current"));
+    target.button.classList.add("review-current");
+    drawCursor();
+    return true;
+  }
+
+  function stepReviewChange(direction) {
+    const point = caret();
+    const atReview = reviewCaret && point[0] === reviewCaret[0] && point[1] === reviewCaret[1];
+    let next;
+    if (atReview) next = reviewIndex + direction;
+    else {
+      const line = lineRange([point[0]])?.lineStart || visibleLine();
+      next = direction > 0 ? reviewChanges.findIndex(change => change.newEnd >= line || change.newStart + 1 >= line)
+        : reviewChanges.findLastIndex(change => change.newStart + 1 <= line);
+    }
+    if (next < 0 || next >= reviewChanges.length) {
+      post({type: "navigateReviewFile", direction, revision: window.quickMarkview.currentRevision});
+    } else jumpToReviewChange(next);
+  }
+
+  new ResizeObserver(() => layoutReviewMarks()).observe(document.getElementById("content"));
+  window.addEventListener("resize", layoutReviewMarks);
+
+  let zoomRefreshFrame = null;
+  const zoomActions = {"+": "in", "=": "reset", "-": "out"};
   const bindings = {
+    "+": () => post({type: "zoom", action: "in", revision: window.quickMarkview.currentRevision}),
+    "=": () => post({type: "zoom", action: "reset", revision: window.quickMarkview.currentRevision}),
+    "-": () => post({type: "zoom", action: "out", revision: window.quickMarkview.currentRevision}),
+    "[[": () => stepReviewChange(-1),
+    "]]": () => stepReviewChange(1),
+    " cc": () => post({type: "acknowledgeChanges", revision: window.quickMarkview.currentRevision}),
     h: () => motion("backward", "character"),
     j: () => cellAtCursor() ? rowStep(1, true) : motion("forward", "line"),
     k: () => cellAtCursor() ? rowStep(-1, true) : motion("backward", "line"),
@@ -617,6 +746,16 @@
 
   document.addEventListener("keydown", event => {
     if (event.metaKey || event.altKey || event.isComposing) return;
+    if (Object.hasOwn(zoomActions, event.key)) {
+      const input = element => element instanceof Element &&
+        (element.closest("input, textarea") || element.isContentEditable);
+      if (event.ctrlKey || editState || input(event.target) || input(document.activeElement) ||
+          !window.quickMarkview.currentRevision) return;
+      event.preventDefault();
+      pending = "";
+      bindings[event.key]();
+      return;
+    }
     if (event.ctrlKey && !event.shiftKey && (event.key === "ArrowLeft" || event.key === "ArrowRight")) {
       event.preventDefault();
       pending = "";
@@ -650,6 +789,14 @@
   window.addEventListener("focus", restoreSelection);
 
   window.quickMarkview = {
+    refreshAfterZoom: function () {
+      if (zoomRefreshFrame !== null) cancelAnimationFrame(zoomRefreshFrame);
+      zoomRefreshFrame = requestAnimationFrame(() => {
+        zoomRefreshFrame = null;
+        layoutReviewMarks();
+        drawCursor(false);
+      });
+    },
     currentLine: null,
     currentRevision: 0,
     renderVersion: 0,
@@ -672,6 +819,10 @@
       if (editState) closeEditor(true);
       const oldScroll = window.scrollY;
       const version = ++this.renderVersion;
+      reviewChanges = []; reviewIndex = -1; reviewCaret = null; reviewSignature = "";
+      pending = "";
+      reviewDetails.hidden = true;
+      reviewLayer.replaceChildren();
       const env = {};
       const text = String(source || "");
       currentSource = text;
@@ -714,6 +865,7 @@
         if (this.currentLine) caret = this.scrollToLine(this.currentLine);
         else { window.scrollTo(0, oldScroll); caret = Array.from(document.querySelectorAll("[data-source-start]")).find(node => node.getBoundingClientRect().top >= 0); }
         mode = ""; placeCaret(caret);
+        layoutReviewMarks();
         post({type: "ready", revision: this.currentRevision});
       })));
     },
@@ -731,6 +883,17 @@
       drawCursor();
     },
     setStashMarks: function (ranges) { stashRanges = ranges; applyStashMarks(); },
+    setReviewChanges: function (changes, revision) {
+      if (Number(revision) !== this.currentRevision) return;
+      const signature = String(revision) + JSON.stringify(changes);
+      if (signature === reviewSignature) return;
+      reviewSignature = signature;
+      reviewChanges = changes;
+      reviewIndex = -1; reviewCaret = null;
+      reviewDetails.hidden = true;
+      layoutReviewMarks();
+    },
+    jumpToReviewChange: jumpToReviewChange,
     visibleLine: visibleLine,
     findStatus: findStatus,
     selectedText: sendSelection,

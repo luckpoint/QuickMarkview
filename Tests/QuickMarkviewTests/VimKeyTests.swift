@@ -9,10 +9,10 @@ final class VimKeyTests: XCTestCase, WKNavigationDelegate, WKScriptMessageHandle
     private var awaited: (type: String, expectation: XCTestExpectation)?
     private var lastSelection: [String: Any]?
     private var lastMessage: [String: Any]?
+    private var zoomMessages: [[String: Any]] = []
     private var lastOpenLink: [String: Any]?
     private var lastImageSources: [String]?
     private var result: String?
-
     func testHTMLImageWithSmartQuotesUsesLocalImageResolutionAndPercentageWidth() {
         let view = loadViewer("<img src=“images/screenshot.png” alt=“iOSブラウザ比較アプリの画面” width=“30%”>\n")
         XCTAssertEqual(lastImageSources, ["images/screenshot.png"])
@@ -366,6 +366,113 @@ final class VimKeyTests: XCTestCase, WKNavigationDelegate, WKScriptMessageHandle
         XCTAssertEqual(js(view, "String(document.dispatchEvent(new KeyboardEvent('keydown', {key: 'ArrowRight', ctrlKey: true, shiftKey: true, cancelable: true})))"), "true")
     }
 
+    func testReviewMarksUseSmallestBlocksAndStaySeparateFromStash() {
+        let view = loadViewer("- first\n- changed\n\nlast")
+        settleRender(view)
+        _ = js(view, "window.quickMarkview.setStashMarks([[2, 2]]); window.quickMarkview.setReviewChanges([{oldStart:1,oldEnd:2,newStart:1,newEnd:2,oldText:'previous'}],1); ''")
+        XCTAssertEqual(js(view, "String(document.querySelectorAll('#content .review-modified').length)"), "1")
+        XCTAssertEqual(js(view, "document.querySelector('.review-modified').tagName"), "LI")
+        XCTAssertEqual(js(view, "String(document.querySelectorAll('.stashed').length > 0 && !document.querySelector('ul').classList.contains('review-modified'))"), "true")
+        XCTAssertEqual(js(view, "String(document.querySelectorAll('#review-marks button').length)"), "1")
+        _ = js(view, "window.quickMarkview.setReviewChanges([],1); ''")
+        XCTAssertEqual(js(view, "String(!document.querySelector('#content .review-modified') && !!document.querySelector('.stashed'))"), "true")
+    }
+
+    func testReviewNavigationAndGlobalAcknowledgeKeys() {
+        let view = loadViewer("first\n\nmiddle\n\nlast")
+        settleRender(view)
+        _ = js(view, "window.quickMarkview.setReviewChanges([{oldStart:0,oldEnd:1,newStart:0,newEnd:1,oldText:'old first'},{oldStart:4,oldEnd:5,newStart:4,newEnd:5,oldText:'old last'}],1); ''")
+        press(view, "]", "]")
+        XCTAssertEqual(js(view, "getSelection().focusNode.textContent"), "first")
+        press(view, "]", "]")
+        XCTAssertEqual(js(view, "getSelection().focusNode.textContent"), "last")
+        awaitMessage("navigateReviewFile") { press(view, "]", "]") }
+        XCTAssertEqual(lastMessage?["direction"] as? Int, 1)
+        press(view, "[", "[")
+        XCTAssertEqual(js(view, "getSelection().focusNode.textContent"), "first")
+        awaitMessage("navigateReviewFile") { press(view, "[", "[") }
+        XCTAssertEqual(lastMessage?["direction"] as? Int, -1)
+        awaitMessage("acknowledgeChanges") { press(view, " ", "c", "c") }
+        XCTAssertEqual(lastMessage?["revision"] as? Int, 1)
+    }
+
+    func testDeletionAtEOFKeepsPreviousSourceOutOfCurrentSelection() {
+        let view = loadViewer("survivor")
+        settleRender(view)
+        _ = js(view, "window.quickMarkview.setReviewChanges([{oldStart:1,oldEnd:3,newStart:1,newEnd:1,oldText:'removed\\n<script>literal</script>'}],1); document.querySelector('#review-marks button').click(); ''")
+        XCTAssertEqual(js(view, "document.querySelector('#review-details textarea').value"), "removed\n<script>literal</script>")
+        XCTAssertEqual(js(view, "document.getElementById('content').textContent.trim()"), "survivor")
+        XCTAssertEqual(js(view, "String(document.querySelector('#review-details textarea').readOnly && !document.querySelector('#review-details [data-source-start]'))"), "true")
+        XCTAssertEqual(js(view, "String(parseFloat(document.querySelector('#review-marks button').style.top) >= document.querySelector('#content p').getBoundingClientRect().bottom + scrollY)"), "true")
+        _ = js(view, "window.quickMarkview.setReviewChanges([],1); ''")
+        XCTAssertEqual(js(view, "String(document.querySelector('#review-details').hidden && !document.querySelector('#review-marks button'))"), "true")
+    }
+
+    func testFullDeletionAndStaleReviewRevision() {
+        let view = loadViewer("before")
+        settleRender(view)
+        _ = js(view, "window.quickMarkview.setDocument('',null,2); window.quickMarkview.setReviewChanges([{oldStart:0,oldEnd:1,newStart:0,newEnd:0,oldText:'before'}],2); ''")
+        settleRender(view)
+        XCTAssertEqual(js(view, "String(document.querySelectorAll('#review-marks button').length)"), "1")
+        awaitMessage("navigateReviewFile") {
+            press(view, "]", "]", "]", "]")
+        }
+        _ = js(view, "window.quickMarkview.setReviewChanges([],1); ''")
+        XCTAssertEqual(js(view, "String(document.querySelectorAll('#review-marks button').length)"), "1")
+        _ = js(view, "document.querySelector('#review-marks button').click(); ''")
+        XCTAssertEqual(js(view, "document.querySelector('#review-details textarea').value"), "before")
+    }
+
+    func testZoomBindingsConsumeKeysAndClearPrefix() {
+        let view = loadViewer("alpha beta")
+        for (key, action) in [("+", "in"), ("=", "reset"), ("-", "out")] {
+            press(view, " ")
+            awaitMessage("zoom") {
+                XCTAssertEqual(js(view, "String(!document.dispatchEvent(new KeyboardEvent('keydown', {key: '\(key)', shiftKey: true, repeat: true, cancelable: true})))"), "true")
+            }
+            XCTAssertEqual(lastMessage?["action"] as? String, action)
+            XCTAssertEqual(lastMessage?["revision"] as? Int, 1)
+            // 'a a' would open the request panel if the Space prefix survived.
+            XCTAssertEqual(js(view, "String(document.dispatchEvent(new KeyboardEvent('keydown', {key: 'a', cancelable: true})))"), "true")
+        }
+    }
+
+    func testZoomExcludesModifiersCompositionAndInputs() {
+        let view = loadViewer("alpha beta")
+        zoomMessages = []
+        for option in ["metaKey", "ctrlKey", "altKey", "isComposing"] {
+            XCTAssertEqual(js(view, "String(document.dispatchEvent(new KeyboardEvent('keydown', {key: '+', \(option): true, cancelable: true})))"), "true")
+        }
+        for tag in ["input", "textarea", "div"] {
+            XCTAssertEqual(js(view, """
+                (() => {
+                  const input = document.createElement('\(tag)');
+                  if ('\(tag)' === 'div') input.contentEditable = 'true';
+                  document.body.append(input); input.focus();
+                  const allowed = ['+', '=', '-'].every(key => input.dispatchEvent(new KeyboardEvent('keydown', {key, bubbles: true, cancelable: true})));
+                  input.remove(); return String(allowed);
+                })()
+                """), "true")
+        }
+        XCTAssertTrue(zoomMessages.isEmpty)
+    }
+
+    func testZoomRefreshPreservesVisualModesAndSelection() {
+        let view = loadViewer("alpha beta\n\ngamma delta")
+        for mode in ["v", "V"] {
+            press(view, "g", "g", mode, "l")
+            let selected = js(view, "getSelection().toString()")
+            awaitMessage("zoom") { press(view, "+") }
+            view.pageZoom = 2
+            _ = js(view, "window.quickMarkview.refreshAfterZoom(); window.quickMarkview.refreshAfterZoom(); ''")
+            settleRender(view)
+            XCTAssertEqual(js(view, "getSelection().toString()"), selected)
+            press(view, "j")
+            XCTAssertNotEqual(js(view, "getSelection().toString()"), selected)
+            press(view, "Escape")
+        }
+    }
+
     private func loadViewer(_ markdown: String) -> WKWebView {
         let root = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
@@ -421,6 +528,7 @@ final class VimKeyTests: XCTestCase, WKNavigationDelegate, WKScriptMessageHandle
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
         guard let body = message.body as? [String: Any], let type = body["type"] as? String else { return }
         lastMessage = body
+        if type == "zoom" { zoomMessages.append(body) }
         if type == "selection" { lastSelection = body }
         if type == "openLink" { lastOpenLink = body }
         if type == "resolveImages" { lastImageSources = body["sources"] as? [String] }
